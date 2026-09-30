@@ -1,0 +1,25 @@
+[project]
+name = "bookmind"
+version = "2.0.0"
+description = "Offline-first, microservice-structured RAG reader for Kenya's AI policy documents."
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC"]
+# S110: cache/dedupe outages are deliberately non-fatal. S105: false positive on a Lua script.
+ignore = ["S101", "S104", "S105", "S110", "B008", "UP007", "S311"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B"]
+"deploy/k8s/generate.py" = ["E501", "S108"]  # dense manifest data; /tmp is a pod mount path

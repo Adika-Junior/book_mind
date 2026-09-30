@@ -1,0 +1,61 @@
+# Alerts fire on user-facing symptoms and SLO burn, not on raw CPU (blueprint §6).
+# SLOs: 99.5% of API requests succeed; 95% of non-research requests complete within 500 ms.
+groups:
+  - name: bookmind-slo
+    rules:
+      - record: bookmind:api_errors:ratio_rate5m
+        expr: |
+          sum(rate(bookmind_http_requests_total{service="gateway",status=~"5.."}[5m]))
+          / clamp_min(sum(rate(bookmind_http_requests_total{service="gateway"}[5m])), 1e-9)
+      - record: bookmind:api_errors:ratio_rate1h
+        expr: |
+          sum(rate(bookmind_http_requests_total{service="gateway",status=~"5.."}[1h]))
+          / clamp_min(sum(rate(bookmind_http_requests_total{service="gateway"}[1h])), 1e-9)
+
+      # Multi-window burn-rate alert (Google SRE workbook): 14.4x burn on a 0.5% error budget.
+      - alert: BookMindErrorBudgetBurn
+        expr: bookmind:api_errors:ratio_rate5m > (14.4 * 0.005) and bookmind:api_errors:ratio_rate1h > (14.4 * 0.005)
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "BookMind is burning its error budget fast ({{ $value | humanizePercentage }} errors)"
+          runbook: "docs/ARCHITECTURE.md#runbook"
+
+      - alert: BookMindSlowResponses
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(bookmind_http_request_duration_seconds_bucket{service="gateway",route!="/api/v1/research"}[10m]))) > 0.5
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "p95 latency above 500 ms for 10 minutes"
+
+  - name: bookmind-dependencies
+    rules:
+      - alert: BookMindCircuitOpen
+        expr: max by (service, breaker) (bookmind_circuit_breaker_state) == 2
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.service }} has had its '{{ $labels.breaker }}' circuit open for 5 minutes"
+
+      - alert: BookMindModelDegraded
+        expr: |
+          sum(rate(bookmind_research_generations_total{source="extractive"}[15m]))
+          / clamp_min(sum(rate(bookmind_research_generations_total{source=~"model|extractive"}[15m])), 1e-9) > 0.5
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Most research answers are extractive fallbacks — is Ollama down or the model not pulled?"
+
+      - alert: BookMindDeadLetters
+        expr: increase(bookmind_events_consumed_total{outcome="dead_lettered"}[15m]) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: "Events were dead-lettered on {{ $labels.topic }} — inspect the DLQ"
+
+      - alert: BookMindTargetDown
+        expr: up{job="bookmind"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.instance }} ({{ $labels.service }}) is not being scraped"

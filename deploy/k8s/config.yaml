@@ -1,0 +1,28 @@
+# Non-secret configuration. Changing bookmind-flags takes effect live (the file is re-read every
+# few seconds); operators can also override single flags in Redis:  HSET bm:flags llm_enabled false
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: bookmind-config, namespace: bookmind }
+data:
+  BOOKMIND_ENV: production
+  BOOKMIND_LOG_LEVEL: INFO
+  BOOKMIND_REDIS_URL: redis://redis:6379/0
+  # Service discovery via Kubernetes Services + CoreDNS.
+  BOOKMIND_CATALOG_URL: http://catalog:8000
+  BOOKMIND_SEARCH_URL: http://search:8000
+  BOOKMIND_RESEARCH_URL: http://research:8000
+  BOOKMIND_NOTEBOOK_URL: http://notebook:8000
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4318
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: bookmind-flags, namespace: bookmind }
+data:
+  flags.json: |
+    {
+      "research_enabled": true,
+      "simplify_enabled": true,
+      "llm_enabled": true,
+      "notes_search_enabled": true,
+      "maintenance_message": ""
+    }

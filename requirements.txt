@@ -1,0 +1,11 @@
+# Runtime dependencies — pinned so CI, containers and laptops run exactly what was tested.
+# Dependabot (.github/dependabot.yml) + pip-audit in CI keep these current and CVE-free.
+fastapi==0.142.1
+starlette==1.7.0
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+pydantic==2.13.5
+python-dotenv==1.2.3
+rank-bm25==0.2.2
+redis==8.1.0
+prometheus-client==0.26.0

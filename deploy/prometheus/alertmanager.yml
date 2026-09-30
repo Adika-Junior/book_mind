@@ -1,0 +1,17 @@
+# Route pages and tickets separately. Replace the webhook with PagerDuty / Opsgenie / Slack:
+#   pagerduty_configs: [{ routing_key_file: /run/secrets/pagerduty_key }]
+route:
+  receiver: default
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="page"]
+      receiver: on-call
+receivers:
+  - name: default
+  - name: on-call
+    webhook_configs:
+      - url: http://127.0.0.1:9/replace-me   # placeholder: point at your paging integration
+        send_resolved: true

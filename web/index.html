@@ -1,0 +1,148 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BookMind</title>
+<meta name="description" content="An offline-first reader for Kenya's AI policy documents with read-aloud, cited research notes and a notebook.">
+<meta name="theme-color" content="#1e0f0a">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BookMind">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/css/app.css">
+<script type="module" src="/js/app.js"></script>
+</head>
+<body>
+
+<svg width="0" height="0" class="sr-only" aria-hidden="true" focusable="false">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7.5h8M8 11h6"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path class="fill" d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5v14M15.5 5v14" stroke-width="3"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></symbol>
+  <symbol id="i-speak" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/></symbol>
+</svg>
+
+<header class="topbar">
+  <button class="iconbtn" id="navToggle" aria-label="Documents" aria-expanded="false" aria-controls="nav"><svg class="icon"><use href="#i-menu"/></svg></button>
+  <div class="brand">
+    <img class="brand-mark" src="/icons/icon.svg" alt="" width="30" height="30">
+    <div class="brand-text">
+      <h1>BookMind</h1>
+      <div class="sub" id="brandSub">Kenya AI policy reader</div>
+    </div>
+  </div>
+  <span class="chip" id="netChip" hidden><span class="dot"></span><span id="netText"></span></span>
+  <button class="iconbtn" id="searchBtn" aria-label="Search the documents and your notes (/)"><svg class="icon"><use href="#i-search"/></svg></button>
+  <button class="iconbtn" id="themeBtn" aria-label="Switch light or dark theme"><svg class="icon"><use id="themeIcon" href="#i-moon"/></svg></button>
+  <button class="iconbtn" id="notebookBtn" aria-label="Notebook" aria-expanded="false" aria-controls="notebook"><svg class="icon"><use href="#i-book"/></svg><span class="badge" id="noteCount" hidden></span></button>
+</header>
+
+<div class="banner" id="updateBanner" hidden role="status"><p>A new version of BookMind is ready.</p><button id="updateBtn" type="button">Reload</button></div>
+<div class="banner info" id="noticeBanner" hidden role="status"><p id="noticeText"></p><button id="noticeClose" type="button" aria-label="Dismiss">OK</button></div>
+
+<div class="shell">
+  <nav class="nav" id="nav" aria-label="Documents">
+    <div id="resumeCard"></div>
+    <h2>Documents</h2>
+    <div id="docList"></div>
+    <h2>This device</h2>
+    <div class="nav-actions">
+      <button class="btn ghost small" id="installBtn" type="button" hidden><svg class="icon"><use href="#i-download"/></svg>Install app</button>
+    </div>
+    <h2>Services</h2>
+    <ul class="service-list" id="serviceList"><li><span>Checking…</span></li></ul>
+    <div class="nav-foot">
+      Works offline after the first visit. Notes are saved on this device and sync when you're back online.
+      <br>AGPL-3.0 · <a href="https://www.gnu.org/licenses/agpl-3.0.html" class="linkbtn" rel="noopener">license</a>
+    </div>
+  </nav>
+  <div class="scrim nav-scrim" id="navScrim"></div>
+
+  <main class="reader" id="reader">
+    <div class="reader-scroll" id="readerScroll">
+      <article class="page" id="page" aria-live="polite">
+        <div class="page-kicker">
+          <span class="doc-title" id="pageDoc">Loading…</span>
+          <span class="page-no" id="pageNo"></span>
+        </div>
+        <div class="page-body" id="pageBody"></div>
+      </article>
+      <div class="pager">
+        <button class="btn ghost" id="prevBtn" type="button" aria-label="Previous page"><svg class="icon"><use href="#i-left"/></svg><span class="label">Previous</span></button>
+        <label class="pos"><span>Page</span><input id="pageInput" type="number" inputmode="numeric" min="1" aria-label="Go to page"><span id="pageTotal"></span></label>
+        <button class="btn ghost" id="nextBtn" type="button" aria-label="Next page"><span class="label">Next</span><svg class="icon"><use href="#i-right"/></svg></button>
+      </div>
+    </div>
+  </main>
+
+  <div class="scrim panel-scrim" id="panelScrim"></div>
+  <aside class="panel" id="notebook" aria-label="Notebook">
+    <div class="panel-head">
+      <h2>Notebook</h2>
+      <button class="iconbtn" id="notebookClose" aria-label="Close notebook"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="panel-body" id="notesList"></div>
+    <div class="panel-foot">
+      <button class="btn ghost small" id="syncBtn" type="button"><svg class="icon"><use href="#i-cloud"/></svg>Sync now</button>
+      <button class="btn small" id="exportBtn" type="button" disabled><svg class="icon"><use href="#i-download"/></svg>Export .md</button>
+    </div>
+  </aside>
+</div>
+
+<div class="seltoolbar" id="selToolbar" role="toolbar" aria-label="Selection actions">
+  <button type="button" id="btnResearch"><svg class="icon"><use href="#i-spark"/></svg>Research</button>
+  <button type="button" id="btnSimplify"><svg class="icon"><use href="#i-bulb"/></svg>Simplify</button>
+  <button type="button" id="btnReadHere"><svg class="icon"><use href="#i-speak"/></svg>Read from here</button>
+</div>
+
+<footer class="audiobar" aria-label="Read aloud">
+  <button class="playbtn" id="playBtn" type="button" aria-label="Read this page aloud"><svg class="icon"><use id="playIcon" href="#i-play"/></svg></button>
+  <span class="audio-status" id="audioStatus" role="status">Press play to hear this page.</span>
+  <div class="audio-controls">
+    <select id="voiceSelect" aria-label="Voice"></select>
+    <label class="rate">Speed <input type="range" id="rateRange" min="0.6" max="1.8" step="0.1" value="1" aria-label="Reading speed"></label>
+    <label class="rate">Text <input type="range" id="sizeRange" min="15" max="26" step="1" value="18" aria-label="Text size"></label>
+  </div>
+  <button class="iconbtn" id="audioMore" type="button" aria-label="Voice, speed and text size" aria-expanded="false" aria-controls="audioPopover"><svg class="icon"><use href="#i-sliders"/></svg></button>
+</footer>
+
+<div class="popover" id="audioPopover" hidden>
+  <label>Voice <select id="voiceSelectM"></select></label>
+  <label>Reading speed <input type="range" id="rateRangeM" min="0.6" max="1.8" step="0.1" value="1"></label>
+  <label>Text size <input type="range" id="sizeRangeM" min="15" max="26" step="1" value="18"></label>
+</div>
+
+<div class="dialog" id="searchDialog" hidden role="dialog" aria-modal="true" aria-label="Search">
+  <div class="dialog-card">
+    <div class="search-row">
+      <svg class="icon"><use href="#i-search"/></svg>
+      <input id="searchInput" type="search" placeholder="Search all four documents and your notes" autocomplete="off" enterkeyhint="search" aria-label="Search">
+      <button class="iconbtn" id="searchClose" aria-label="Close search"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="search-meta" id="searchMeta">Try “high-risk”, “sandbox”, “Commissioner” or a clause number.</div>
+    <div class="results" id="searchResults"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="boot" id="boot" hidden><div class="card"><h2>Couldn’t open the book</h2><p id="bootMsg"></p><button class="btn" id="bootRetry" type="button">Try again</button></div></div>
+
+</body>
+</html>

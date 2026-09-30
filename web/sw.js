@@ -3,15 +3,21 @@
 //
 //   App shell (HTML/CSS/JS/icons)  precached, cache-first        -> instant, offline start
 //   Book text + glossary           precached, stale-while-revalidate -> offline reading & search
+//   Meaning-search vectors         cached on first use, stale-while-revalidate (≈3 MB, so not precached)
+//   Read-aloud audio (Piper)       cache-first: same voice + text = same audio, so pages you've
+//                                  listened to play again offline; bounded, oldest evicted first
 //   Navigations                    network-first (3 s), cached shell as fallback
 //   Everything else under /api/    network only (the page handles offline itself: notes are
-//                                  queued in IndexedDB and replayed with Idempotency-Keys)
+//                                  queued in IndexedDB and replayed with Idempotency-Keys —
+//                                  by the page, or by this worker when the app is closed)
 //
 // Bump VERSION whenever any file in SHELL changes; the page then offers a one-tap update.
 
-const VERSION = "2.3.1-1";
+const VERSION = "2.4.0-1";
 const SHELL_CACHE = `bookmind-shell-${VERSION}`;
 const DATA_CACHE = "bookmind-data-v1";
+const AUDIO_CACHE = "bookmind-audio-v1";
+const AUDIO_MAX_ENTRIES = 600; // ≈ 30–60 MB of sentences; oldest are dropped first
 const SHELL = [
   "/",
   "/css/themes.css",
@@ -30,6 +36,7 @@ const SHELL = [
   "/js/net.js",
   "/js/search.js",
   "/js/store.js",
+  "/js/sync-core.js",
   "/manifest.webmanifest",
   "/icons/icon.svg",
   "/icons/icon-192.png",
@@ -38,7 +45,7 @@ const SHELL = [
   "/icons/apple-touch-icon.png",
 ];
 const DATA = ["/api/v1/book", "/api/v1/config"];
-const SWR_PATHS = new Set(["/api/v1/book", "/api/v1/definitions"]);
+const SWR_PATHS = new Set(["/api/v1/book", "/api/v1/definitions", "/api/v1/semantic"]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
@@ -57,7 +64,7 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
-    const keep = new Set([SHELL_CACHE, DATA_CACHE]);
+    const keep = new Set([SHELL_CACHE, DATA_CACHE, AUDIO_CACHE]);
     for (const key of await caches.keys()) if (key.startsWith("bookmind-") && !keep.has(key)) await caches.delete(key);
     if (self.registration.navigationPreload) await self.registration.navigationPreload.enable();
     await self.clients.claim();
@@ -68,11 +75,30 @@ self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
-// Background Sync: the browser fires this when connectivity returns. Open tabs own the outbox
-// logic, so tell them to flush it.
+// Notes sync while the app is closed. The browser wakes this worker for:
+//   * "sync" (Background Sync) — once connectivity returns after a note was saved offline. If the
+//     promise rejects (server down), the browser retries later with its own backoff.
+//   * "periodicsync" (installed PWAs) — occasionally, to push leftovers and pull other devices' notes.
+// The worker replays the IndexedDB outbox itself with the same code the page uses (sync-core.js),
+// under a Web Lock so an open tab and the worker never replay concurrently. Open tabs are told to
+// refresh their notebook afterwards.
+importScripts("/js/sync-core.js");
+
+async function backgroundSync({ pull }) {
+  const { pushed, changed } = await self.BookMindSync.syncOnce(self.BookMindSync.idbStore, self.BookMindSync.request, { pull });
+  if (pushed || changed) {
+    for (const c of await self.clients.matchAll({ type: "window" })) c.postMessage({ type: "SYNCED", pushed, changed });
+  }
+}
+
 self.addEventListener("sync", (event) => {
   if (event.tag !== "bookmind-sync") return;
-  event.waitUntil(self.clients.matchAll({ type: "window" }).then((clients) => clients.forEach((c) => c.postMessage({ type: "SYNC" }))));
+  event.waitUntil(backgroundSync({ pull: true }));
+});
+
+self.addEventListener("periodicsync", (event) => {
+  if (event.tag !== "bookmind-refresh") return;
+  event.waitUntil(backgroundSync({ pull: true }).catch(() => {})); // periodic: just try again next time
 });
 
 function timeout(ms) {
@@ -115,6 +141,31 @@ async function cacheFirst(request) {
   return res;
 }
 
+async function cachedAudio(event) {
+  const cache = await caches.open(AUDIO_CACHE);
+  const hit = await cache.match(event.request);
+  if (hit) return hit;
+  const res = await fetch(event.request);
+  if (res.ok) {
+    event.waitUntil((async () => {
+      await cache.put(event.request, res.clone());
+      const keys = await cache.keys(); // insertion order: oldest first
+      for (const k of keys.slice(0, Math.max(0, keys.length - AUDIO_MAX_ENTRIES))) await cache.delete(k);
+    })());
+  }
+  return res;
+}
+
+async function networkThenCache(request) {
+  try {
+    const res = await fetch(request);
+    if (res.ok) { const copy = res.clone(); caches.open(DATA_CACHE).then((c) => c.put(request.url, copy)); }
+    return res;
+  } catch {
+    return (await caches.match(request.url, { cacheName: DATA_CACHE })) || Response.error();
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return; // mutations go straight to the network
@@ -133,6 +184,8 @@ self.addEventListener("fetch", (event) => {
     }).catch(async () => (await caches.match("/api/v1/config")) || Response.error()));
     return;
   }
+  if (url.pathname === "/api/v1/tts") { event.respondWith(cachedAudio(event)); return; }
+  if (url.pathname === "/api/v1/tts/voices") { event.respondWith(networkThenCache(request)); return; }
   if (url.pathname.startsWith("/api/") || ["/healthz", "/readyz", "/metrics"].includes(url.pathname)) return;
   event.respondWith(cacheFirst(request));
 });

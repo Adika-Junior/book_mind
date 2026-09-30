@@ -60,10 +60,13 @@ async def test_book_etag_revalidation(client):
 
 
 async def test_search_aggregates_passages(client):
-    r = await client.get("/api/v1/search", params={"q": "high-risk artificial intelligence"})
+    r = await client.get("/api/v1/search", params={"q": "high-risk artificial intelligence", "mode": "keyword"})
     data = r.json()
     assert data["passages"][0]["id"] == "bill-8"
     assert data["partial"] is False
+    # Hybrid (the default) blends in meaning; the clause stays near the top, the contents page doesn't lead.
+    hybrid = (await client.get("/api/v1/search", params={"q": "high-risk artificial intelligence"})).json()["passages"]
+    assert "bill-8" in [p["id"] for p in hybrid[:3]] and hybrid[0]["id"] != "bill-0"
 
 
 async def test_research_degrades_to_extractive_when_model_down(client):

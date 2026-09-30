@@ -66,6 +66,7 @@ groups:
           or absent(up{job="bookmind", service="research"})
           or absent(up{job="bookmind", service="notebook"})
           or absent(up{job="bookmind", service="websearch"})
+          or absent(up{job="bookmind", service="tts"})
         for: 1m
         labels: { severity: page }
         annotations:

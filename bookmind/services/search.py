@@ -1,7 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Search service — the query side of CQRS.
 
-* Passage index: BM25 over every page, built from the catalog service's data at startup.
+* Passage index: hybrid retrieval over every page, built from the catalog service's data at startup —
+  BM25 (exact words) fused with embedding similarity (meaning; bookmind/common/embed.py). Pages are
+  embedded as overlapping ~60-word windows and a page scores by its best window, so one relevant
+  paragraph isn't diluted by the rest of the page. Scores are fused as a weighted sum of
+  max-normalised BM25 and min-max-normalised similarity (BOOKMIND_SEMANTIC_WEIGHT, default 0.7) — on
+  our evaluation this kept every exact-term query in the top 3 while doubling top-3 hits for
+  paraphrased questions (tests/test_semantic.py). Without an embedder it is plain BM25.
 * Notes read model: a denormalised, search-optimised projection of the notebook, maintained by
   consuming `notebook.notes` events. The notebook service (write side) never gets query load.
 
@@ -12,13 +18,20 @@ are ignored, so replays, duplicates and out-of-order delivery all converge to th
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import socket
+import time
 from contextlib import asynccontextmanager
+from typing import Literal
 
-from fastapi import Query
+import numpy as np
+from fastapi import Query, Request, Response
 from rank_bm25 import BM25Okapi
 
+from bookmind.common.config import get_settings
+from bookmind.common.embed import load_embedder
 from bookmind.common.events import Event, get_bus
 from bookmind.common.rpc import ServiceClient
 from bookmind.common.service import create_service
@@ -31,11 +44,111 @@ catalog = ServiceClient("catalog", timeout_s=10)
 notebook = ServiceClient("notebook", timeout_s=5)
 
 
+def windows(text: str, size: int = 60, stride: int = 30) -> list[str]:
+    """Overlapping word windows — roughly a paragraph each."""
+    words = text.split()
+    if len(words) <= size:
+        return [" ".join(words)] if words else []
+    return [" ".join(words[i : i + size]) for i in range(0, len(words) - size + stride, stride)]
+
+
+class SemanticIndex:
+    """Embedding vectors for every window of every page."""
+
+    RETRY_S = 60
+
+    def __init__(self, embedder):
+        self.embedder = embedder
+        self.vectors: np.ndarray | None = None
+        self.owners: np.ndarray | None = None
+        self.texts: list[str] = []
+        self.pack: bytes | None = None
+        self.version: str | None = None
+        self._failed_at = 0.0
+        self._lock = asyncio.Lock()
+
+    @property
+    def ready(self) -> bool:
+        return self.vectors is not None
+
+    async def _embed(self, texts: list[str]) -> np.ndarray:
+        if hasattr(self.embedder, "aembed"):
+            return await self.embedder.aembed(texts)
+        return await asyncio.to_thread(self.embedder.embed, texts)
+
+    async def build(self, chunks: list[dict], version: str | None) -> None:
+        if self.embedder is None or (self.ready and self.version == version):
+            return
+        if time.monotonic() - self._failed_at < self.RETRY_S:
+            return
+        async with self._lock:
+            if self.ready and self.version == version:
+                return
+            texts, owners = [], []
+            for i, c in enumerate(chunks):
+                for w in windows(c["text"]):
+                    texts.append(w)
+                    owners.append(i)
+            started = time.monotonic()
+            try:
+                vectors = await self._embed(texts)
+            except Exception as exc:  # noqa: BLE001 — model server down: keyword search still works
+                self._failed_at = time.monotonic()
+                log(logger, logging.WARNING, "semantic_index_unavailable", embedder=self.embedder.kind, error=repr(exc))
+                return
+            self.texts, self.owners, self.vectors, self.version = texts, np.asarray(owners), vectors, version
+            self.pack = None
+            if hasattr(self.embedder, "browser_pack"):
+                pack = await asyncio.to_thread(
+                    self.embedder.browser_pack, vectors, owners, [c["id"] for c in chunks], version or ""
+                )
+                self.pack = json.dumps(pack, separators=(",", ":")).encode()
+            log(logger, logging.INFO, "semantic_index_built", embedder=self.embedder.kind, model=self.embedder.name,
+                windows=len(texts), seconds=round(time.monotonic() - started, 2))
+
+    def meaningful(self, q: str, vocabulary: set[str]) -> bool:
+        """At least half the query's words are real words (known to the corpus or word-like to the
+        model). Otherwise don't search by meaning — keyword results only."""
+        words = re.findall(r"[a-z]{3,}", q.lower().replace("'s", ""))
+        if not words or not hasattr(self.embedder, "wordlike"):
+            return bool(words) or not hasattr(self.embedder, "wordlike")
+        known = sum(1 for w in words if w in vocabulary or self.embedder.wordlike(w))
+        return 2 * known >= len(words)
+
+    async def query_vector(self, q: str, vocabulary: set[str] = frozenset()) -> np.ndarray | None:
+        if not self.ready or not self.meaningful(q, vocabulary):
+            return None
+        try:
+            return (await self._embed([q]))[0]
+        except Exception as exc:  # noqa: BLE001
+            log(logger, logging.WARNING, "semantic_query_failed", error=repr(exc))
+            return None
+
+    def page_scores(self, qvec: np.ndarray, n_pages: int) -> tuple[np.ndarray, np.ndarray]:
+        """Best window similarity per page, and which window it was."""
+        sims = self.vectors @ qvec
+        best = np.full(n_pages, -1.0)
+        np.maximum.at(best, self.owners, sims)
+        best_window = np.full(n_pages, -1)
+        for w in np.argsort(sims):  # ascending: the last write per page is its best window
+            best_window[self.owners[w]] = w
+        return best, best_window
+
+
+# Tables of contents mention every heading, so they match almost any query — by words and by
+# meaning — while being the least useful page to land on. They rank below the pages they point to.
+NAV_PAGE = re.compile(r"ARRANGEMENT OF (CLAUSES|SECTIONS)|TABLE OF CONTENTS|^\s*Contents\b", re.I)
+NAV_PRIOR = 0.8
+
+
 class PassageIndex:
-    def __init__(self):
+    def __init__(self, semantic: SemanticIndex | None = None):
         self.chunks: list[dict] = []
         self.bm25: BM25Okapi | None = None
         self.version: str | None = None
+        self.semantic = semantic
+        self.vocabulary: set[str] = set()
+        self.prior: np.ndarray | None = None
         self._lock = asyncio.Lock()
 
     @property
@@ -44,7 +157,10 @@ class PassageIndex:
 
     def load(self, payload: dict) -> None:
         chunks = payload["chunks"]
-        self.bm25 = BM25Okapi([tokenize(c["text"]) or ["_"] for c in chunks])
+        docs = [tokenize(c["text"]) or ["_"] for c in chunks]
+        self.bm25 = BM25Okapi(docs)
+        self.vocabulary = {w for d in docs for w in d}
+        self.prior = np.array([NAV_PRIOR if NAV_PAGE.search(" ".join(c["text"].split())[:300]) else 1.0 for c in chunks])
         self.chunks = chunks
         self.version = payload.get("version")
 
@@ -56,27 +172,61 @@ class PassageIndex:
                 self.load(await catalog.get("/v1/book"))
                 log(logger, logging.INFO, "passage_index_built", chunks=len(self.chunks), version=self.version)
 
-    def query(self, q: str, k: int = 5, exclude: str | None = None, doc: str | None = None, full: bool = False) -> list[dict]:
+    # A page with no shared words is only returned on meaning if it is close to the best match and
+    # similar enough in absolute terms (the embedder's calibrated floor), so an off-topic query
+    # returns nothing rather than noise.
+    RELATIVE_SIMILARITY = 0.8
+
+    def query(
+        self,
+        q: str,
+        k: int = 5,
+        exclude: str | None = None,
+        doc: str | None = None,
+        full: bool = False,
+        qvec: np.ndarray | None = None,
+        mode: str = "hybrid",
+    ) -> list[dict]:
         tokens = tokenize(q)
-        if not tokens or self.bm25 is None:
+        if self.bm25 is None or (not tokens and qvec is None):
             return []
-        scores = self.bm25.get_scores(tokens)
-        ranked = sorted(range(len(self.chunks)), key=lambda i: scores[i], reverse=True)
+        n = len(self.chunks)
+        bm = self.bm25.get_scores(tokens) if tokens and mode != "semantic" else np.zeros(n)
+        sem = best_window = None
+        if qvec is not None and mode != "keyword" and self.semantic and self.semantic.ready:
+            sem, best_window = self.semantic.page_scores(qvec, n)
+        if sem is None:
+            combined, eligible = bm, bm > 0
+        else:
+            w = 1.0 if mode == "semantic" else get_settings().semantic_weight
+            bn = bm / bm.max() if bm.max() > 0 else bm
+            sn = (sem - sem.min()) / (sem.max() - sem.min() + 1e-9)
+            combined = w * sn + (1 - w) * bn
+            top = float(sem.max())
+            floor = getattr(self.semantic.embedder, "min_similarity", 0.2)
+            eligible = (bm > 0) | ((sem >= floor) & (sem >= self.RELATIVE_SIMILARITY * top))
+        combined = combined * self.prior
+        ranked = np.argsort(-combined, kind="stable")
         out = []
         for i in ranked:
-            if scores[i] <= 0:
-                break
+            i = int(i)
+            if not eligible[i]:
+                continue
             c = self.chunks[i]
             if (exclude and c["id"] == exclude) or (doc and c["doc"] != doc):
                 continue
+            words = " ".join(best_sentences(q, c["text"], 2))
+            if not words and best_window is not None and best_window[i] >= 0:
+                words = self.semantic.texts[best_window[i]]  # the paragraph that matched in meaning
             hit = {
                 "id": c["id"],
                 "doc": c["doc"],
                 "docShort": c["docShort"],
                 "docTitle": c["docTitle"],
                 "page": c["page"],
-                "score": round(float(scores[i]), 3),
-                "snippet": excerpt(" ".join(best_sentences(q, c["text"], 2)) or c["text"], 320),
+                "score": round(float(combined[i]), 3),
+                "match": "meaning" if bm[i] <= 0 else ("words" if sem is None else "both"),
+                "snippet": excerpt(words or c["text"], 320),
             }
             if full:
                 hit["text"] = c["text"]
@@ -129,7 +279,9 @@ class NotesProjection:
         ]
 
 
-index = PassageIndex()
+embedder = load_embedder()
+semantic = SemanticIndex(embedder)
+index = PassageIndex(semantic)
 projection = NotesProjection()
 
 
@@ -146,6 +298,7 @@ async def _bootstrap() -> None:
     for attempt in range(30):
         try:
             await index.ensure()
+            await semantic.build(index.chunks, index.version)
             break
         except Exception as exc:  # noqa: BLE001 — catalog may still be starting
             log(logger, logging.WARNING, "passage_index_retry", attempt=attempt, error=repr(exc))
@@ -186,9 +339,30 @@ async def passages(
     exclude: str | None = None,
     doc: str | None = None,
     full: bool = False,
+    mode: Literal["hybrid", "keyword", "semantic"] = "hybrid",
 ):
     await index.ensure()
-    return {"results": index.query(q, k, exclude, doc, full), "index_version": index.version}
+    if embedder is not None and not semantic.ready:
+        await semantic.build(index.chunks, index.version)  # retried at most once a minute if it failed
+    qvec = await semantic.query_vector(q, index.vocabulary) if mode != "keyword" else None
+    return {
+        "results": index.query(q, k, exclude, doc, full, qvec=qvec, mode=mode),
+        "index_version": index.version,
+        "semantic": {"enabled": qvec is not None, "model": getattr(embedder, "name", None)},
+    }
+
+
+@app.get("/v1/semantic-pack")
+async def semantic_pack(request: Request):
+    """Vectors for offline meaning-search in the browser (static embedder only)."""
+    await index.ensure()
+    await semantic.build(index.chunks, index.version)
+    if semantic.pack is None:
+        return Response(status_code=404)
+    etag = f'"sp-{semantic.version}-{embedder.name}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return Response(semantic.pack, media_type="application/json", headers={"ETag": etag})
 
 
 @app.get("/v1/notes")

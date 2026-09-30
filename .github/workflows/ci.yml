@@ -27,6 +27,8 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12", cache: pip, cache-dependency-path: requirements-dev.txt }
       - run: pip install -r requirements-dev.txt
+      - name: Piper test voice (small legacy voice from GitHub releases; exercises real synthesis)
+        run: python tools/voices.py get en-us-lessac-low
       - name: Lint
         run: ruff check .
       - name: Unit + integration tests (incl. Redis Streams / Redis KV backends)
@@ -56,6 +58,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12", cache: pip, cache-dependency-path: requirements.txt }
       - run: pip install -r requirements.txt
+      - run: python tools/voices.py get en-us-lessac-low
         working-directory: .
       - uses: actions/setup-node@v4
         with: { node-version: "22", cache: npm, cache-dependency-path: tests/e2e/package-lock.json }

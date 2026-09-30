@@ -3,7 +3,7 @@
 
 import { api, HttpError, SyncEngine } from "./net.js";
 import { escapeHtml, renderMD } from "./md.js";
-import { definitions, excerpt, extractiveAnswer, searchNotes, searchPassages, tokenize } from "./search.js";
+import { definitions, excerpt, extractiveAnswer, loadSemanticPack, searchNotes, searchPassages, semanticReady, tokenize } from "./search.js";
 import { buildOutline, nextHeading, sectionAt, structure } from "./structure.js";
 import { relatedElsewhere, relatedNotes, worthNoting } from "./insights.js";
 import { captureAnchor, paintAnchors } from "./anchor.js";
@@ -485,30 +485,90 @@ function openNotebook() {
 }
 const closeNotebook = () => setDrawer($("notebook"), $("notebookBtn"), $("panelScrim"), false, mq.panel.matches);
 
-/* =========================================================== read aloud (Web Speech API) */
+/* =========================================================== read aloud (Piper neural voices + Web Speech API) */
+// Two engines behind one player:
+//  * Natural voices — Piper neural TTS on the BookMind server (bookmind/services/tts.py). Consistent
+//    across devices, runs on the reader's own server, and a page you've heard replays offline (the
+//    service worker caches each sentence's audio).
+//  * Device voices — the browser's Web Speech API. Always the fallback: offline and not yet cached,
+//    server busy, or natural voices switched off. Falling back is per sentence, so reading never stops.
 
 const tts = {
   supported: "speechSynthesis" in window,
-  voices: [], playing: false, index: 0, gen: 0, wakeLock: null,
+  voices: [], neural: [], neuralMaxChars: 600, playing: false, index: 0, gen: 0, wakeLock: null,
+  audio: null, prefetched: new Map(), fellBack: false,
 
+  async loadNeural() {
+    try {
+      const data = await api("/api/v1/tts/voices", { timeout: 5000 });
+      this.neural = data.voices || [];
+      this.neuralMaxChars = data.max_chars || 600;
+    } catch { this.neural = []; }
+    this.loadVoices();
+  },
   loadVoices() {
-    if (!this.supported) return;
-    this.voices = speechSynthesis.getVoices();
+    this.voices = this.supported ? speechSynthesis.getVoices() : [];
     const saved = store.prefs.get("voice");
     for (const sel of [$("voiceSelect"), $("voiceSelectM")]) {
       sel.textContent = "";
-      if (!this.voices.length) { sel.add(new Option("Default voice", "")); continue; }
+      if (this.neural.length) {
+        const g = document.createElement("optgroup");
+        g.label = "Natural voices (Piper)";
+        for (const v of this.neural) g.appendChild(new Option(`${v.name} · ${v.language.replace("_", "-")}${v.quality ? " · " + v.quality : ""}`, `piper:${v.id}`));
+        sel.appendChild(g);
+      }
+      const g = this.neural.length ? document.createElement("optgroup") : sel;
+      if (this.neural.length) { g.label = "This device's voices"; sel.appendChild(g); }
+      if (!this.voices.length) g.appendChild(new Option("Default device voice", ""));
       const sorted = [...this.voices].sort((a, b) => (b.lang.startsWith("en") - a.lang.startsWith("en")) || a.name.localeCompare(b.name));
-      for (const v of sorted) sel.add(new Option(`${v.name} (${v.lang})`, v.voiceURI));
-      const match = this.voices.find((v) => v.voiceURI === saved) || this.voices.find((v) => /^en[-_](KE|GB)/i.test(v.lang)) || this.voices.find((v) => v.lang.startsWith("en")) || this.voices[0];
-      if (match) sel.value = match.voiceURI;
+      for (const v of sorted) g.appendChild(new Option(`${v.name} (${v.lang})`, v.voiceURI));
+      const values = [...sel.options].map((o) => o.value);
+      // Keep the reader's choice; otherwise prefer a natural English voice, then a Kenyan/British device voice.
+      const neuralEn = this.neural.find((v) => v.language.startsWith("en"));
+      const device = this.voices.find((v) => /^en[-_](KE|GB)/i.test(v.lang)) || this.voices.find((v) => v.lang.startsWith("en")) || this.voices[0];
+      sel.value = values.includes(saved) ? saved : neuralEn ? `piper:${neuralEn.id}` : device ? device.voiceURI : values[0] || "";
     }
   },
+  neuralId() { const v = $("voiceSelect").value || ""; return v.startsWith("piper:") ? v.slice(6) : null; },
   voice() { return this.voices.find((v) => v.voiceURI === $("voiceSelect").value); },
   spans() { return $("pageBody").querySelectorAll(".sentence"); },
+  rate() { return parseFloat($("rateRange").value) || 1; },
+
+  /** Split an over-long sentence at clause boundaries so each request stays under the server limit. */
+  pieces(text) {
+    const t = text.replace(/\s+/g, " ").trim();
+    if (t.length <= this.neuralMaxChars) return [t];
+    const out = [];
+    let rest = t;
+    while (rest.length > this.neuralMaxChars) {
+      const window = rest.slice(0, this.neuralMaxChars);
+      const cut = Math.max(window.lastIndexOf("; "), window.lastIndexOf(", "), window.lastIndexOf(" — "), window.lastIndexOf(" "));
+      const at = cut > this.neuralMaxChars / 3 ? cut + 1 : this.neuralMaxChars;
+      out.push(rest.slice(0, at).trim());
+      rest = rest.slice(at).trim();
+    }
+    if (rest) out.push(rest);
+    return out;
+  },
+  audioUrl(id, text) { return `/api/v1/tts?voice=${encodeURIComponent(id)}&text=${encodeURIComponent(text)}`; },
+  /** Fetch one piece of audio as a blob (the service worker caches it for offline replays). */
+  fetchAudio(id, text) {
+    const url = this.audioUrl(id, text);
+    if (!this.prefetched.has(url)) {
+      const p = fetch(url, { credentials: "same-origin" }).then((r) => { if (!r.ok) throw new Error(`tts ${r.status}`); return r.blob(); });
+      p.catch(() => this.prefetched.delete(url));
+      this.prefetched.set(url, p);
+      while (this.prefetched.size > 8) this.prefetched.delete(this.prefetched.keys().next().value);
+    }
+    return this.prefetched.get(url);
+  },
+  prefetch(i) {
+    const id = this.neuralId(), span = this.spans()[i];
+    if (id && span) this.fetchAudio(id, this.pieces(span.textContent)[0]).catch(() => {});
+  },
 
   speakFrom(i) {
-    if (!this.supported) { toast("Read-aloud isn't supported in this browser."); return; }
+    if (!this.supported && !this.neuralId()) { toast("Read-aloud isn't supported in this browser."); return; }
     const spans = this.spans();
     if (i >= spans.length) {
       setStatus("Turning the page…");
@@ -523,16 +583,59 @@ const tts = {
     span.classList.add("reading");
     setCurrentBlock(span);
     if (!isElementVisible(span)) span.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-    const u = new SpeechSynthesisUtterance(span.textContent);
+    const next = () => { if (gen === this.gen && this.playing) this.speakFrom(i + 1); };
+    setStatus(`Reading ${DOC().short}, page ${state.idx + 1}`);
+    const id = this.neuralId();
+    if (id) this.speakNeural(id, span.textContent, gen, next);
+    else this.speakDevice(span.textContent, next);
+  },
+  async speakNeural(id, text, gen, next) {
+    const parts = this.pieces(text);
+    this.prefetch(this.index + 1); // fetch the next sentence while this one plays: no gaps
+    try {
+      for (const part of parts) {
+        const blob = await this.fetchAudio(id, part);
+        if (gen !== this.gen) return;
+        await this.playBlob(blob, gen);
+        if (gen !== this.gen) return;
+      }
+      this.fellBack = false;
+      next();
+    } catch {
+      if (gen !== this.gen) return;
+      // Offline and not cached, or the server can't synthesise: read this sentence with the device voice.
+      if (!this.fellBack) toast("Natural voice unavailable right now — using this device's voice.");
+      this.fellBack = true;
+      if (this.supported) this.speakDevice(text, next);
+      else this.stop("The natural voice is unavailable and this browser has no built-in voice.");
+    }
+  },
+  playBlob(blob, gen) {
+    return new Promise((resolve, reject) => {
+      if (!this.audio) { this.audio = new Audio(); this.audio.preservesPitch = true; }
+      const a = this.audio;
+      const url = URL.createObjectURL(blob);
+      const done = (fn) => () => { a.onended = a.onerror = null; URL.revokeObjectURL(url); fn(); };
+      a.onended = done(resolve);
+      a.onerror = done(() => reject(new Error("audio playback failed")));
+      a.src = url;
+      a.playbackRate = this.rate(); // speed changes tempo, not pitch
+      a.play().catch((err) => { if (gen === this.gen) { a.onended = a.onerror = null; URL.revokeObjectURL(url); reject(err); } });
+    });
+  },
+  speakDevice(text, next) {
+    const u = new SpeechSynthesisUtterance(text);
     const v = this.voice();
     if (v) { u.voice = v; u.lang = v.lang; }
-    u.rate = parseFloat($("rateRange").value) || 1;
-    const next = () => { if (gen === this.gen && this.playing) this.speakFrom(i + 1); };
+    u.rate = this.rate();
     u.onend = next;
     u.onerror = (e) => { if (e.error !== "interrupted" && e.error !== "canceled") next(); };
-    setStatus(`Reading ${DOC().short}, page ${state.idx + 1}`);
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
+  },
+  silence() {
+    if (this.supported) speechSynthesis.cancel();
+    if (this.audio) { this.audio.onended = this.audio.onerror = null; this.audio.pause(); }
   },
   play(from = this.index) {
     this.playing = true;
@@ -545,7 +648,7 @@ const tts = {
   // some desktop engines; restarting at the current sentence works everywhere.
   pause() {
     this.playing = false; this.gen++;
-    if (this.supported) speechSynthesis.cancel();
+    this.silence();
     setPlayIcon(false);
     setStatus("Paused — press play to continue from the highlighted sentence.");
     this.releaseWakeLock();
@@ -554,7 +657,7 @@ const tts = {
   stop(msg) {
     const was = this.playing;
     this.playing = false; this.gen++; this.index = 0;
-    if (this.supported) speechSynthesis.cancel();
+    this.silence();
     setPlayIcon(false);
     this.spans().forEach((s) => s.classList.remove("reading", "spoken"));
     if (msg || was) setStatus(msg || "Press play to hear this page.");
@@ -824,9 +927,24 @@ async function queuePut(note) {
   requestBackgroundSync();
 }
 function requestBackgroundSync() {
-  // Where supported, the browser wakes the service worker when connectivity returns, and it
-  // tells any open tab to flush the outbox.
+  // Three layers, so a note reaches the server even if the app is closed right after writing it:
+  //  1. Background Sync (Chromium): the browser wakes the service worker when connectivity returns
+  //     — even with no BookMind tab open — and sw.js replays the outbox itself (sync-core.js);
+  //  2. keepalive flush on pagehide/hidden (every browser): see SyncEngine.flushOnExit;
+  //  3. the next time the app opens, SyncEngine replays whatever is still queued.
+  sync && sync.track();
   navigator.serviceWorker?.ready.then((reg) => reg.sync && reg.sync.register("bookmind-sync")).catch(() => {});
+}
+
+async function registerPeriodicSync(reg) {
+  // Periodic Background Sync (installed Chromium PWAs only): the browser occasionally wakes the
+  // worker to push anything left over and pull notes made on other devices, so the notebook is
+  // current the next time it's opened — even offline. The browser decides the real interval.
+  try {
+    if (!("periodicSync" in reg)) return;
+    const perm = await navigator.permissions.query({ name: "periodic-background-sync" });
+    if (perm.state === "granted") await reg.periodicSync.register("bookmind-refresh", { minInterval: 12 * 60 * 60 * 1000 });
+  } catch { /* unsupported or not installed: the other layers still cover it */ }
 }
 
 function newNote(mode, selection, extra = {}) {
@@ -1240,7 +1358,7 @@ const runSearch = debounce(async (q) => {
   if (seq !== searchSeq) return;
 
   $("searchMeta").textContent = `${passages.length} passage${passages.length === 1 ? "" : "s"}, ${notes.length} note${notes.length === 1 ? "" : "s"}` +
-    (where === "offline" ? " · searched on this device (offline)" : where === "partial" ? " · some results unavailable" : "");
+    (where === "offline" ? ` · searched on this device (offline${semanticReady() ? ", by words and meaning" : ""})` : where === "partial" ? " · some results unavailable" : "");
   results.textContent = "";
   const group = (title, items, render) => {
     if (!items.length) return;
@@ -1250,7 +1368,10 @@ const runSearch = debounce(async (q) => {
   group("In the documents", passages, (p) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "result";
-    b.innerHTML = `<div class="where">${escapeHtml(p.docShort)} · page ${p.page}</div><div class="snippet">${escapeHtml(p.snippet)}</div>`;
+    // "Similar meaning": found by what the words mean, not because they appear on the page — say so,
+    // so a reader isn't left hunting for a term that isn't there.
+    const meaning = p.match === "meaning" ? ' · <span class="tag tag-meaning">Similar meaning</span>' : "";
+    b.innerHTML = `<div class="where">${escapeHtml(p.docShort)} · page ${p.page}${meaning}</div><div class="snippet">${escapeHtml(p.snippet)}</div>`;
     b.addEventListener("click", () => { closeSearch(); goTo(p.doc, p.page - 1, { jump: true }); highlightQuery(q); });
     return b;
   });
@@ -1336,7 +1457,13 @@ async function registerSW() {
       w && w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) showUpdate(w); });
     });
     navigator.serviceWorker.addEventListener("controllerchange", () => { if (userRequestedReload) location.reload(); });
-    navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "SYNC") sync && sync.run(); });
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      const type = e.data && e.data.type;
+      if (type === "SYNC") sync && sync.run();
+      // The worker replayed the outbox (or pulled other devices' notes) in the background.
+      if (type === "SYNCED" && sync) { reloadNotes(); updateNetChip(); }
+    });
+    registerPeriodicSync(reg);
     setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
   } catch (err) {
     console.warn("Service worker unavailable (needs HTTPS or localhost):", err);
@@ -1448,6 +1575,7 @@ function wire() {
   $("playBtn").addEventListener("click", () => tts.toggle());
   tts.loadVoices();
   if (tts.supported) speechSynthesis.onvoiceschanged = () => tts.loadVoices(); // voices load async on most browsers
+  tts.loadNeural();
   const syncControl = (a, b, key, apply) => {
     for (const [src, dst] of [[a, b], [b, a]]) {
       $(src).addEventListener("input", () => { $(dst).value = $(src).value; store.prefs.set(key, $(src).value); apply && apply($(src).value); });
@@ -1470,7 +1598,10 @@ function wire() {
   }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") { if (tts.playing) tts.acquireWakeLock(); sync.run(); }
+    // "hidden" is the last event mobile browsers reliably deliver before a tab is discarded.
+    else sync.flushOnExit();
   });
+  addEventListener("pagehide", () => sync.flushOnExit());
 
   // Selection toolbar
   document.addEventListener("selectionchange", onSelection);
@@ -1593,6 +1724,15 @@ function wire() {
 
 /* =========================================================== boot */
 
+/** Download the vectors for offline search-by-meaning once the page is idle (≈2 MB, then cached by
+ *  the service worker and revalidated with an ETag). Optional: without it, offline search is BM25. */
+async function loadSemantic() {
+  try {
+    const data = await api("/api/v1/semantic", { timeout: 60000 });
+    loadSemanticPack(data);
+  } catch { /* not enabled on this server, or offline and never cached */ }
+}
+
 async function boot() {
   applyPrefs();
   registerSW();
@@ -1619,6 +1759,7 @@ async function boot() {
   loadConfig();
   refreshStatus();
   sync.run();
+  (window.requestIdleCallback || ((fn) => setTimeout(fn, 1500)))(() => loadSemantic());
   setInterval(() => navigator.onLine && sync.run(), 60000);
   setInterval(refreshStatus, 60000);
 }

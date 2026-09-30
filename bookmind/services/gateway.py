@@ -22,6 +22,7 @@ import math
 import secrets
 import time
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,6 +48,7 @@ search = ServiceClient("search", timeout_s=5)
 research = ServiceClient("research", timeout_s=settings.ollama_timeout_s + 10, failure_threshold=3)
 notebook = ServiceClient("notebook", timeout_s=5)
 websearch = ServiceClient("websearch", timeout_s=12)
+tts = ServiceClient("tts", timeout_s=30)
 CLIENTS = {"catalog": catalog, "search": search, "research": research, "notebook": notebook, "websearch": websearch}
 
 book_cache = Cache("book", ttl_s=300, stale_ttl_s=30 * 86400)
@@ -211,7 +213,11 @@ async def get_definitions(request: Request):
 
 
 @app.get("/api/v1/search")
-async def unified_search(q: str = Query(..., min_length=1, max_length=500), k: int = Query(8, ge=1, le=25)):
+async def unified_search(
+    q: str = Query(..., min_length=1, max_length=500),
+    k: int = Query(8, ge=1, le=25),
+    mode: Literal["hybrid", "keyword", "semantic"] = "hybrid",
+):
     want_notes = await flags.enabled("notes_search_enabled")
 
     async def notes():
@@ -220,7 +226,7 @@ async def unified_search(q: str = Query(..., min_length=1, max_length=500), k: i
         return await search.get("/v1/notes", params={"q": q, "k": k})
 
     passages_res, notes_res = await asyncio.gather(
-        search.get("/v1/passages", params={"q": q, "k": k}), notes(), return_exceptions=True
+        search.get("/v1/passages", params={"q": q, "k": k, "mode": mode}), notes(), return_exceptions=True
     )
     errors = [name for name, r in (("passages", passages_res), ("notes", notes_res)) if isinstance(r, Exception)]
     if len(errors) == 2:
@@ -228,10 +234,67 @@ async def unified_search(q: str = Query(..., min_length=1, max_length=500), k: i
     return {
         "query": q,
         "passages": [] if isinstance(passages_res, Exception) else passages_res["results"],
+        "semantic": None if isinstance(passages_res, Exception) else passages_res.get("semantic"),
         "notes": [] if isinstance(notes_res, Exception) else notes_res["results"],
         "partial": bool(errors),
         "unavailable": errors,
     }
+
+
+_semantic_pack: dict = {"at": 0.0, "body": None, "etag": None}
+
+
+@app.get("/api/v1/semantic")
+async def semantic_pack(request: Request):
+    """Vectors that let the app search by meaning offline (≈2 MB; cached by the service worker).
+    Held in gateway memory for 10 minutes rather than in the shared cache: it's large and immutable
+    per book version."""
+    now = time.monotonic()
+    if _semantic_pack["body"] is None or now - _semantic_pack["at"] > 600:
+        try:
+            pack = await search.get("/v1/semantic-pack", timeout_s=60)
+        except ClientError:
+            return JSONResponse({"detail": "Meaning search isn't enabled on this server."}, status_code=404)
+        except (UpstreamError, CircuitOpenError):
+            return degraded("Search is unavailable right now.")
+        body = json.dumps(pack, separators=(",", ":")).encode()
+        _semantic_pack.update(at=now, body=body, etag=f'"sp-{pack["version"]}-{pack["model"]}"')
+    headers = {"ETag": _semantic_pack["etag"], "Cache-Control": "no-cache"}
+    if request.headers.get("if-none-match") == _semantic_pack["etag"]:
+        return Response(status_code=304, headers=headers)
+    return Response(_semantic_pack["body"], media_type="application/json", headers=headers)
+
+
+# ----------------------------------------------------------------------------- read-aloud (Piper)
+
+
+@app.get("/api/v1/tts/voices")
+async def tts_voices():
+    if not await flags.enabled("neural_voices_enabled"):
+        return {"engine": None, "voices": [], "disabled": True}
+    try:
+        return await tts.get("/v1/voices", timeout_s=5, retries=1)
+    except (UpstreamError, CircuitOpenError, ClientError):
+        return {"engine": None, "voices": [], "unavailable": True}
+
+
+@app.get("/api/v1/tts")
+async def tts_speak(
+    voice: str = Query(..., pattern=r"^[A-Za-z0-9_.\-]{1,80}$"),
+    text: str = Query(..., min_length=1, max_length=2000),
+    rate: float = Query(1.0, ge=0.5, le=2.0),
+):
+    """One sentence of audio. GET (not POST) so the browser and service worker can cache it: the
+    same voice + text always produces the same audio, and cached pages replay offline."""
+    if not await flags.enabled("neural_voices_enabled"):
+        return JSONResponse({"detail": "Natural voices are switched off."}, status_code=404)
+    try:
+        audio, media = await tts.get("/v1/speak", params={"voice": voice, "text": text, "rate": rate}, timeout_s=30, retries=1, raw=True)
+    except ClientError as exc:
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status)
+    except (UpstreamError, CircuitOpenError):
+        return degraded("The voice service is busy or unavailable — using your device's voice.")
+    return Response(audio, media_type=media, headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
 # ----------------------------------------------------------------------------- research + saga
@@ -384,12 +447,15 @@ async def web_search(q: str = Query(..., min_length=2, max_length=300), k: int =
 # ----------------------------------------------------------------------------- config & status
 
 
+CLIENT_FLAGS = ("research_enabled", "simplify_enabled", "llm_enabled", "notes_search_enabled", "web_search_enabled", "neural_voices_enabled")
+
+
 @app.get("/api/v1/config")
 async def client_config():
     current = await flags.all()
     return {
         "version": __version__,
-        "flags": {k: current[k] for k in ("research_enabled", "simplify_enabled", "llm_enabled", "notes_search_enabled", "web_search_enabled")},
+        "flags": {k: current.get(k, True) for k in CLIENT_FLAGS},
         "maintenance_message": current.get("maintenance_message") or "",
         "limits": {"max_selection_chars": settings.max_selection_chars, "max_context_chars": settings.max_context_chars},
     }

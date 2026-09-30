@@ -20,7 +20,8 @@ history) are in [`rag-digital-book-architecture.md`](rag-digital-book-architectu
 
 ```
                          ┌──────────── browser / installed PWA (offline-first) ────────────┐
-                         │ service worker cache · IndexedDB notes + outbox · JS BM25 search │
+                         │ SW cache · IndexedDB notes + outbox (Background Sync) · hybrid   │
+                         │ search (BM25 + meaning vectors) · cached voice audio             │
                          └──────────────────────────────┬───────────────────────────────────┘
                                           HTTPS / HTTP2 │  (optional CDN → WAF in front)
                                     ┌───────────────────▼───────────────────┐
@@ -56,6 +57,7 @@ history) are in [`rag-digital-book-architecture.md`](rag-digital-book-architectu
 | research | nothing (cache in Redis) | horizontally; model is the bottleneck | `bookmind/services/research.py` |
 | notebook | notes (SQLite), outbox | **one writer** (see §4 for the Postgres path) | `bookmind/services/notebook.py` |
 | websearch | nothing (cache in Redis); the **only** app service with internet egress | horizontally | `bookmind/services/websearch.py` |
+| tts | nothing (voice files on a read-only volume, audio LRU in memory); no egress at all | horizontally on RWX/ROX storage; CPU-bound | `bookmind/services/tts.py` |
 
 The same code runs in three shapes:
 
@@ -174,7 +176,40 @@ broker-neutral.
 - **Local-first notes**: IndexedDB is the source of truth on the device; an outbox replays
   changes with idempotency keys, and sync is last-writer-wins with tombstones. Storage
   persistence is requested so the browser doesn't evict it.
-- **Offline intelligence**: JS BM25 search over all 260 pages, and offline "Research/Simplify"
+- **Sync after the app is closed**: `web/js/sync-core.js` is the one outbox-replay
+  implementation, loaded by the page (`net.js`) and by the service worker (`importScripts`).
+  1. *Background Sync* (Chromium): saving a note offline registers `bookmind-sync`; when the
+     network returns the browser wakes the worker — no tab needed — and it replays the IndexedDB
+     outbox itself. A rejected promise makes the browser retry with backoff.
+  2. *Periodic Background Sync* (installed Chromium PWAs): `bookmind-refresh` occasionally pushes
+     leftovers and pulls other devices' notes, so the notebook is current when next opened.
+  3. *keepalive flush* (every browser, incl. Firefox/Safari): on `pagehide`/hidden the page hands
+     queued changes to `fetch(…, {keepalive: true})`, which outlives the page (64 KiB budget).
+  4. Next open: the page replays whatever is still queued.
+  All four use the same Idempotency-Keys (`put-<id>-<updated_at>`), so overlapping deliveries are
+  answered from the idempotency store (a concurrent duplicate gets 409 and retries), and a Web
+  Lock stops a tab and the worker replaying at the same time. Tested end-to-end by closing the
+  page and dispatching the sync events (`tests/e2e/specs/background-sync.spec.mjs`).
+- **Search by meaning**: the search service embeds every page as ~60-word overlapping windows
+  with a static embedding model (WordLlama `l2_supercat`, MIT, weights bundled in the wheel — no
+  download, CPU-only, ~0.3 s to embed the corpus) or, optionally, an Ollama embedding model
+  (`BOOKMIND_EMBEDDER=ollama`, `nomic-embed-text`). A page scores by its best window; scores are
+  fused 0.7 × meaning (min-max) + 0.3 × BM25 (max-normalised); tables of contents get a 0.8
+  prior (they match everything and help least). Nonsense is kept out by a similarity floor and
+  a "real words" gate (keyboard mash tokenises into 1–2-character pieces). On a hand-labelled
+  set (`tests/test_semantic.py`) paraphrased questions hit the right page in the top 3 in 6/10
+  cases vs 3/10 for BM25; exact-term queries hold at 5/6 (BM25: 6/6) — a small set, a guard
+  against regressions rather than a benchmark. Results found by meaning alone are labelled
+  "Similar meaning" in the UI.
+  **Offline**, the same model runs in the browser: the "semantic pack" (`/api/v1/semantic`,
+  ~2.8 MB, stale-while-revalidate in the service worker) carries 64-dim int8 token vectors and
+  window vectors; `search.js` tokenises greedily against the vocabulary and averages — the same
+  arithmetic as the server (parity-tested against it).
+- **Natural read-aloud**: `tts` runs Piper voices (see [VOICES.md](VOICES.md)); the page fetches
+  one sentence of WAV at a time with the next prefetched, and falls back per sentence to the Web
+  Speech API. Audio responses are immutable, so the service worker caches them (600 sentences,
+  oldest evicted) and listened pages replay offline.
+- **Offline intelligence**: JS hybrid search over all 260 pages, and offline "Research/Simplify"
   that returns the Bill's own definitions plus cited best-matching sentences. It uses the same
   logic as the server's fallback.
 - **Every device**: mobile-first layout from 320 px phones to wide desktops. Drawers become

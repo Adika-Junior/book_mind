@@ -7,7 +7,15 @@ from a **local, free, open-weight model**, and keep a notebook that syncs across
 
 - 📱 **Every device.** Phone, tablet, laptop, desktop. Install it like an app.
 - ✈️ **Works offline.** After one visit, reading, read-aloud, search and grounded notes all work
-  with no connection. Notes sync when you're back.
+  with no connection. Notes sync when you're back — **even if you've closed the app** (the
+  browser wakes BookMind's service worker to send them).
+- 🗣️ **Natural voices.** Read-aloud uses **Piper** neural voices running on your own server, with
+  the device's voices as automatic fallback. Pages you've listened to replay offline. You can add
+  a **personal or professional custom voice** — how, and the consent it needs:
+  **[docs/VOICES.md](docs/VOICES.md)**.
+- 🧠 **Search that understands meaning.** "punishment for misusing AI" finds the Bill's
+  *offences and penalties* clause even though the words differ. Keyword and meaning search are
+  combined, on the server and offline on the device.
 - 🔒 **Private and free.** No API keys, no cloud AI. The model runs on your own machine via Ollama.
 - 🏗️ **Production architecture.** API gateway, service discovery, event streaming with a DLQ,
   transactional outbox, CQRS, saga, circuit breakers, idempotency, rate limiting, tracing,
@@ -112,17 +120,30 @@ Offline mode needs HTTPS (browsers only allow service workers on HTTPS or `local
 | Look up a term | Tap a dotted-underlined term for the Bill's own definition |
 | Worth noting | Below each page: key points (tap to jump, **Keep** to save), cross-references, related passages elsewhere, your related notes. Toggle in **Aa → Reading aids**. |
 | Web search | In search (`/`), **Search the web for "…"**. Or tick **Also consult the web** in the Notebook so Research and Ask include web sources (in a separate, labelled section). Asks once per device before anything is sent. |
-| Listen | ▶ (Space). Choose voice / speed / text size in the bar (⚙ on phones). Tap a sentence to jump there. Lock-screen controls work. |
+| Listen | ▶ (Space). Choose voice / speed / text size in the bar (⚙ on phones): **Natural voices (Piper)** from your server, or this device's voices. Tap a sentence to jump there. Lock-screen controls work. |
 | Highlight / note | Select text → **Highlight** to keep it, or **Note** to write your own thoughts about it. Your highlights show on the page; tap one to open it. |
 | Research / Simplify | Select text → **Research** (cited explanation) or **Simplify** (plain-English definition), or **Read from here** |
 | Ask the documents | **Notebook → Ask the documents**: type a question, get an answer citing `[Doc, p.N]` |
 | Research sessions | **Notebook → New session** (e.g. "Penalties & enforcement"). New work is filed there; move any note with its session menu. |
 | Review & export | Filter (All · Highlights · My notes · Research), search your notebook, sort newest or reading order, add *Your note* to any answer, **Export brief** (Markdown: questions, highlights & notes in reading order, research notes, references) |
-| Search | 🔍 or `/`. Searches all four documents and your notes, online or offline. |
+| Search | 🔍 or `/`. Searches all four documents and your notes, online or offline, by words *and meaning*. Results found by meaning alone are tagged **Similar meaning**. |
 | Notebook | **Notebook** button (top right) or `n`. Citations like `[Bill, p.9]` jump to the page. |
 | Go back | After a search or citation jump, the sidebar offers **Return** to where you were. |
 
 ---
+
+## Voices for read-aloud
+
+```bash
+python tools/voices.py list                   # installed + recommended voices, with licence notes
+python tools/voices.py get en_GB-cori-high    # public-domain-trained British English voice
+# Compose: docker compose -f deploy/docker-compose.yml --profile tools run --rm tts-voices get en_GB-cori-high
+```
+
+Voice licences differ per voice (some are research-only); `tools/voices.py` records each one's
+source and licence, and the app shows it. To make **your own or a professional voice actor's**
+voice — recording script, recording tips, fine-tuning, and the consent the Kenyan AI Bill and
+Data Protection Act require — see **[docs/VOICES.md](docs/VOICES.md)**.
 
 ## Updating or adding documents
 
@@ -151,9 +172,10 @@ up on its next visit, and saved notes keep pointing at the same document and pag
 bookmind/
   common/        platform library: config & flags, secrets, telemetry, resilience, KV/cache,
                  event bus (memory / Redis Streams), RPC + discovery, idempotency, saga
-  services/      gateway · catalog · search · research · notebook   (one ASGI app each)
+  services/      gateway · catalog · search · research · notebook · websearch · tts   (one ASGI app each)
   local.py       single-process wiring        serve.py   container entrypoint (SERVICE=…)
 tools/           ingest.py (PDFs → data/chunks.json) · themes.py (palettes → themes.css, contrast-checked)
+                 voices.py (download / add Piper voices, with licence + consent records)
 web/             offline-first PWA (no build step, no CDN): index.html, css/, js/, sw.js
 data/chunks.json the four documents, page by page
 deploy/          docker-compose, nginx edge, prometheus/alertmanager/grafana/promtail, k8s

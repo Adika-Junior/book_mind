@@ -15,13 +15,21 @@ SERVICES = {
     #          replicas, min/max HPA,  cpu req, mem limit, extra env
     "gateway":  dict(replicas=2, hpa=(2, 10), cpu="100m", mem="256Mi", env={"BOOKMIND_TRUST_PROXY": "true"}),
     "catalog":  dict(replicas=2, hpa=None, cpu="50m", mem="256Mi", env={}),
-    "search":   dict(replicas=2, hpa=(2, 8), cpu="100m", mem="384Mi", env={}),
+    # search holds the static embedding table (~35 MB) for meaning search.
+    "search":   dict(replicas=2, hpa=(2, 8), cpu="100m", mem="512Mi", env={}),
     "research": dict(replicas=2, hpa=(2, 6), cpu="100m", mem="256Mi", env={
         "BOOKMIND_OLLAMA_URL": "http://ollama:11434/api/chat",
         "BOOKMIND_OLLAMA_MODEL": "llama3.2",
         "BOOKMIND_OLLAMA_TIMEOUT_S": "120",
         "BOOKMIND_MAX_CONCURRENT_GENERATIONS": "2"}),
     "websearch": dict(replicas=2, hpa=None, cpu="50m", mem="192Mi", env={}),
+    # Piper read-aloud. Voice models (read-only files) live on a volume filled by tools/voices.py —
+    # see docs/VOICES.md. One replica because the volume is ReadWriteOnce; with a ReadOnlyMany /
+    # RWX storage class, raise replicas and add an HPA (synthesis is CPU-bound and stateless).
+    "tts": dict(replicas=1, hpa=None, pdb=False, cpu="250m", mem="768Mi",
+                env={"BOOKMIND_VOICES_DIR": "/app/var/voices", "BOOKMIND_TTS_CONCURRENCY": "2"},
+                mounts=[{"name": "voices", "mountPath": "/app/var/voices", "readOnly": True}],
+                volumes=[{"name": "voices", "persistentVolumeClaim": {"claimName": "bookmind-voices", "readOnly": True}}]),
 }
 
 
@@ -111,12 +119,13 @@ for name, cfg in SERVICES.items():
             "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1}},
             "template": {
                 "metadata": {"labels": labels(name), "annotations": {"prometheus.io/scrape": "true", "prometheus.io/port": "8000"}},
-                "spec": pod_spec(container(name, cfg["env"], cfg["cpu"], cfg["mem"])),
+                "spec": pod_spec(container(name, cfg["env"], cfg["cpu"], cfg["mem"], cfg.get("mounts", ())), cfg.get("volumes", ())),
             },
         },
     })
     docs.append(service(name))
-    docs.append(pdb(name))
+    if cfg.get("pdb", True):
+        docs.append(pdb(name))
     if cfg["hpa"]:
         lo, hi = cfg["hpa"]
         docs.append({
@@ -141,6 +150,10 @@ docs.append({
     },
 })
 docs.append(service("notebook"))
+docs.append({
+    "apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "bookmind-voices", "namespace": NS, "labels": labels("tts")},
+    "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "2Gi"}}},
+})
 dump("services", docs)
 
 # ------------------------------------------------------------------ stateful infrastructure
@@ -218,12 +231,14 @@ otlp = {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.na
 
 dump("networkpolicies", [
     policy("default-deny", None, ingress_from=[], egress_to=[]),
-    policy("gateway", "gateway", [ingress_ctrl, scrape], [dns, otlp, to_pods("catalog", "search", "research", "notebook", "websearch"), to_pods("redis", port=6379)]),
+    policy("gateway", "gateway", [ingress_ctrl, scrape], [dns, otlp, to_pods("catalog", "search", "research", "notebook", "websearch", "tts"), to_pods("redis", port=6379)]),
     policy("catalog", "catalog", [from_pods("gateway", "search", "research"), scrape], [dns, otlp]),
     policy("search", "search", [from_pods("gateway", "research"), scrape], [dns, otlp, to_pods("catalog", "notebook"), to_pods("redis", port=6379)]),
     policy("research", "research", [from_pods("gateway"), scrape], [dns, otlp, to_pods("search", "catalog", "websearch"), to_pods("redis", port=6379), to_pods("ollama", port=11434)]),
     # The only app service allowed out to the internet (search providers over HTTPS / SearXNG).
     policy("websearch", "websearch", [from_pods("gateway", "research"), scrape], [dns, otlp, to_pods("redis", port=6379), {"ports": [{"port": 443}, {"port": 8080}]}]),
+    # Read-aloud: synthesises locally, needs nobody and nothing outside the pod.
+    policy("tts", "tts", [from_pods("gateway"), scrape], [dns, otlp]),
     policy("notebook", "notebook", [from_pods("gateway", "search"), scrape], [dns, otlp, to_pods("redis", port=6379)]),
     policy("redis", "redis", [from_pods("gateway", "search", "research", "notebook", "websearch", port=6379)], []),
     # Ollama may reach the internet (to pull weights) but only research may reach Ollama.

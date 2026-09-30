@@ -143,6 +143,13 @@
                 "app.kubernetes.io/name": "websearch"
               }
             }
+          },
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "tts"
+              }
+            }
           }
         ],
         "ports": [
@@ -695,6 +702,100 @@
           },
           {
             "port": 8080
+          }
+        ]
+      }
+    ]
+  }
+}
+---
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "name": "tts",
+    "namespace": "bookmind"
+  },
+  "spec": {
+    "podSelector": {
+      "matchLabels": {
+        "app.kubernetes.io/name": "tts"
+      }
+    },
+    "policyTypes": [
+      "Ingress",
+      "Egress"
+    ],
+    "ingress": [
+      {
+        "from": [
+          {
+            "podSelector": {
+              "matchLabels": {
+                "app.kubernetes.io/name": "gateway"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 8000
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "monitoring"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 8000
+          }
+        ]
+      }
+    ],
+    "egress": [
+      {
+        "to": [
+          {
+            "namespaceSelector": {},
+            "podSelector": {
+              "matchLabels": {
+                "k8s-app": "kube-dns"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 53,
+            "protocol": "UDP"
+          },
+          {
+            "port": 53,
+            "protocol": "TCP"
+          }
+        ]
+      },
+      {
+        "to": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "monitoring"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 4318
           }
         ]
       }

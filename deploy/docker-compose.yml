@@ -45,6 +45,7 @@ x-env: &env
   BOOKMIND_RESEARCH_URL: http://research:8000
   BOOKMIND_NOTEBOOK_URL: http://notebook:8000
   BOOKMIND_WEBSEARCH_URL: http://websearch:8000
+  BOOKMIND_TTS_URL: http://tts:8000
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
 
 services:
@@ -102,7 +103,7 @@ services:
     networks: [backend]
     deploy:
       replicas: 2
-      resources: { limits: { memory: 384m } }
+      resources: { limits: { memory: 512m } }   # includes the static embedding table (meaning search)
 
   research:
     <<: *service
@@ -143,6 +144,33 @@ services:
     networks: [backend, egress]
     deploy:
       resources: { limits: { memory: 192m } }
+
+  # Read-aloud with Piper neural voices. Offline by design: no network beyond the backend.
+  # Fill the voices volume once:  docker compose run --rm tts-voices get en_GB-cori-high
+  tts:
+    <<: *service
+    environment:
+      <<: *env
+      SERVICE: tts
+      BOOKMIND_VOICES_DIR: /app/var/voices
+      BOOKMIND_TTS_CONCURRENCY: ${BOOKMIND_TTS_CONCURRENCY:-2}
+    volumes:
+      - voices:/app/var/voices:ro
+    networks: [backend]
+    deploy:
+      resources: { limits: { cpus: "2", memory: 768m } }
+
+  # One-off helper that downloads vetted voices into the volume (the only step that needs internet).
+  tts-voices:
+    <<: *service
+    profiles: [tools]
+    entrypoint: ["python", "tools/voices.py"]
+    command: ["list"]
+    environment: { BOOKMIND_VOICES_DIR: /app/var/voices }
+    volumes:
+      - voices:/app/var/voices
+    networks: [egress]
+    healthcheck: { disable: true }
 
   # Private metasearch (no tracking, no API key). Queries leave the server only from here.
   searxng:
@@ -256,6 +284,7 @@ networks:
 
 volumes:
   notebook_data: {}
+  voices: {}
   redis_data: {}
   ollama_models: {}
   prometheus_data: {}

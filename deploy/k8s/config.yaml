@@ -13,6 +13,7 @@ data:
   BOOKMIND_RESEARCH_URL: http://research:8000
   BOOKMIND_NOTEBOOK_URL: http://notebook:8000
   BOOKMIND_WEBSEARCH_URL: http://websearch:8000
+  BOOKMIND_TTS_URL: http://tts:8000
   BOOKMIND_WEBSEARCH_PROVIDERS: searxng,wikipedia
   BOOKMIND_SEARXNG_URL: http://searxng.search.svc.cluster.local:8080   # your SearXNG deployment
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.monitoring:4318

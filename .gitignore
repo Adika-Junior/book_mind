@@ -20,3 +20,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Voice models (large; fetch with tools/voices.py)
+data/voices/*
+!data/voices/README.md

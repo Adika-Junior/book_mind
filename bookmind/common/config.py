@@ -116,6 +116,19 @@ class Settings:
     )
     rate_research_burst: int = field(default_factory=lambda: env_int("BOOKMIND_RATE_RESEARCH_BURST", 5))
 
+    # Semantic search (bookmind/common/embed.py). "auto" = the bundled static model if installed.
+    embedder: str = field(default_factory=lambda: env("BOOKMIND_EMBEDDER", "auto"))
+    embed_url: str = field(default_factory=lambda: env("BOOKMIND_EMBED_URL", "http://localhost:11434/api/embed"))
+    embed_model: str = field(default_factory=lambda: env("BOOKMIND_EMBED_MODEL", "nomic-embed-text"))
+    semantic_weight: float = field(default_factory=lambda: env_float("BOOKMIND_SEMANTIC_WEIGHT", 0.7))
+
+    # Read-aloud with Piper neural voices (bookmind/services/tts.py).
+    voices_dir: Path = field(
+        default_factory=lambda: Path(env("BOOKMIND_VOICES_DIR", str(ROOT_DIR / "data" / "voices")))
+    )
+    tts_max_chars: int = field(default_factory=lambda: env_int("BOOKMIND_TTS_MAX_CHARS", 600))
+    tts_concurrency: int = field(default_factory=lambda: env_int("BOOKMIND_TTS_CONCURRENCY", 2))
+
     # Telemetry.
     otlp_endpoint: str | None = field(default_factory=lambda: env("OTEL_EXPORTER_OTLP_ENDPOINT"))
 
@@ -140,6 +153,7 @@ DEFAULT_FLAGS: dict[str, object] = {
     "llm_enabled": True,  # kill switch: false => extractive answers only, never call the model
     "notes_search_enabled": True,  # include your notebook in search results
     "web_search_enabled": True,  # allow opt-in web search (each device still has to opt in)
+    "neural_voices_enabled": True,  # offer the server's Piper voices for read-aloud
     "maintenance_message": "",  # shown as a banner in every client when non-empty
 }
 

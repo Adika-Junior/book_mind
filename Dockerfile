@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# One image for every service; choose with SERVICE=gateway|catalog|search|research|notebook|all.
+# One image for every service; choose with SERVICE=gateway|catalog|search|research|notebook|websearch|tts|all.
 FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -17,6 +17,7 @@ RUN --mount=type=secret,id=ca,required=false \
     pip install -r requirements.txt -r requirements-otel.txt
 
 COPY bookmind/ bookmind/
+COPY tools/voices.py tools/voices.py
 COPY web/ web/
 COPY data/chunks.json data/chunks.json
 COPY deploy/config/flags.json deploy/config/flags.json
@@ -24,7 +25,7 @@ COPY deploy/config/flags.json deploy/config/flags.json
 # Non-root, fixed UID (Kubernetes runAsNonRoot), and the only writable path is /app/var so the
 # root filesystem can be mounted read-only.
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app \
- && mkdir -p /app/var && chown 10001:10001 /app/var
+ && mkdir -p /app/var/voices && chown -R 10001:10001 /app/var
 USER 10001
 
 ENV SERVICE=gateway \

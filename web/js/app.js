@@ -120,10 +120,14 @@ function renderBlocks(body, chunk, docId) {
   body.classList.remove("has-current");
   const counter = { n: 0 };
   const seen = new Set();
+  // Heading levels never skip: sub-headings/questions are h4 only once a section (h3) has started.
+  let inSection = false;
   for (const b of structure(chunk.text, docId)) {
     let el;
     if (b.type === "sec" || b.type === "sub") {
-      el = document.createElement(b.type === "sec" ? "h2" : "h3");
+      // h1 = app, h2 = the page (screen-reader heading in the kicker), h3/h4 = the document's own.
+      el = document.createElement(b.type === "sec" || !inSection ? "h3" : "h4");
+      if (b.type === "sec") inSection = true;
       el.className = b.type;
       const span = document.createElement("span");
       span.className = "sentence";
@@ -139,7 +143,7 @@ function renderBlocks(body, chunk, docId) {
       el.dataset.level = b.type === "sec" ? "2" : "3";
       el.dataset.label = [b.num, b.text].filter(Boolean).join(" — ");
     } else if (b.type === "q") {
-      el = document.createElement("h3");
+      el = document.createElement(inSection ? "h4" : "h3");
       el.className = "q";
       el.dataset.level = "3";
       el.dataset.label = b.text;
@@ -173,6 +177,7 @@ function renderBlocks(body, chunk, docId) {
 function renderKicker(d, c) {
   const wordsLeft = d.chunks.slice(state.idx).reduce((a, x) => a + (x.words || 200), 0);
   $("pageNo").textContent = `Page ${state.idx + 1} of ${d.chunks.length}`;
+  $("pageHeading").textContent = `${d.title}, page ${state.idx + 1}`;
   $("timeLeft").textContent = `About ${minutes(c.words || 200)} min for this page · ${minutes(wordsLeft)} min left in ${d.short}`;
 }
 
@@ -663,7 +668,8 @@ function renderInsights(d, c) {
 
   const section = (title, items) => {
     if (!items.length) return;
-    const h = document.createElement("h4");
+    const h = document.createElement("h3");
+    h.className = "ins-h";
     h.textContent = title;
     const ul = document.createElement("ul");
     items.forEach((li) => ul.appendChild(li));

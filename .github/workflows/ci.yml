@@ -43,6 +43,30 @@ jobs:
       - name: Palette contrast (WCAG) and generated CSS is up to date
         run: python tools/themes.py --check
 
+  e2e:
+    # Real browser tests (desktop + phone): reading, offline, notebook sync, the local-model path,
+    # web search and a WCAG 2.2 AA audit — against stand-in Ollama and SearXNG servers.
+    needs: [test]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: requirements.txt }
+      - run: pip install -r requirements.txt
+        working-directory: .
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: tests/e2e/package-lock.json }
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+        env: { PYTHON: python }
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-report, path: tests/e2e/playwright-report, retention-days: 7 }
+
   manifests:
     runs-on: ubuntu-latest
     steps:
@@ -62,7 +86,7 @@ jobs:
           docker compose -f deploy/docker-compose.yml config -q
 
   image:
-    needs: [test, manifests]
+    needs: [test, e2e, manifests]
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }
     steps:

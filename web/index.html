@@ -64,9 +64,11 @@
   <button class="iconbtn labelled" id="notebookBtn" aria-label="Notebook: your highlights, notes and research" aria-expanded="false" aria-controls="notebook"><svg class="icon"><use href="#i-book"/></svg><span class="btn-label">Notebook</span><span class="badge" id="noteCount" hidden></span></button>
 </header>
 
+<section class="status-region" aria-label="Reading status">
 <div class="reading-progress" role="progressbar" aria-label="Progress through this document" aria-valuemin="0" aria-valuemax="100" id="docProgress"><span id="docProgressFill"></span></div>
 <div class="banner" id="updateBanner" hidden role="status"><p>A new version of BookMind is ready.</p><button id="updateBtn" type="button">Reload</button></div>
 <div class="banner info" id="noticeBanner" hidden role="status"><p id="noticeText"></p><button id="noticeClose" type="button" aria-label="Dismiss">OK</button></div>
+</section>
 
 <div class="shell">
   <nav class="nav" id="nav" aria-label="Documents">
@@ -89,10 +91,19 @@
   <div class="scrim nav-scrim" id="navScrim"></div>
 
   <main class="reader" id="reader">
+    <div class="seltoolbar" id="selToolbar" role="toolbar" aria-label="Selection actions">
+  <button type="button" id="btnHighlight"><svg class="icon"><use href="#i-mark"/></svg>Highlight</button>
+  <button type="button" id="btnNote"><svg class="icon"><use href="#i-pen"/></svg>Note</button>
+  <button type="button" id="btnResearch"><svg class="icon"><use href="#i-spark"/></svg>Research</button>
+  <button type="button" id="btnSimplify"><svg class="icon"><use href="#i-bulb"/></svg>Simplify</button>
+  <button type="button" id="btnReadHere"><svg class="icon"><use href="#i-speak"/></svg>Read from here</button>
+</div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <div class="reader-scroll" id="readerScroll">
       <div class="column">
       <article class="page" id="page">
         <header class="page-kicker">
+          <h2 class="sr-only" id="pageHeading"></h2>
           <nav aria-label="You are here"><ol class="crumbs" id="crumbs"><li>Loading…</li></ol></nav>
           <div class="page-meta"><span id="pageNo"></span><span id="timeLeft"></span></div>
         </header>
@@ -158,13 +169,7 @@
   </aside>
 </div>
 
-<div class="seltoolbar" id="selToolbar" role="toolbar" aria-label="Selection actions">
-  <button type="button" id="btnHighlight"><svg class="icon"><use href="#i-mark"/></svg>Highlight</button>
-  <button type="button" id="btnNote"><svg class="icon"><use href="#i-pen"/></svg>Note</button>
-  <button type="button" id="btnResearch"><svg class="icon"><use href="#i-spark"/></svg>Research</button>
-  <button type="button" id="btnSimplify"><svg class="icon"><use href="#i-bulb"/></svg>Simplify</button>
-  <button type="button" id="btnReadHere"><svg class="icon"><use href="#i-speak"/></svg>Read from here</button>
-</div>
+
 
 <footer class="audiobar" aria-label="Read aloud">
   <button class="playbtn" id="playBtn" type="button" aria-label="Read this page aloud"><svg class="icon"><use id="playIcon" href="#i-play"/></svg></button>
@@ -246,7 +251,6 @@
   </div>
 </div>
 
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <div class="boot" id="boot" hidden><div class="card"><h2>Couldn’t open the book</h2><p id="bootMsg"></p><button class="btn" id="bootRetry" type="button">Try again</button></div></div>
 
 </body>

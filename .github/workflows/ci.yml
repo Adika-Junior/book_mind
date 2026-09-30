@@ -34,7 +34,7 @@ jobs:
         env: { TEST_REDIS_URL: "redis://localhost:6379/0" }
       - name: Dependency vulnerability audit
         run: pip-audit -r requirements.txt -r requirements-otel.txt
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "22" }
       - name: Frontend syntax check
         run: for f in web/js/*.js web/sw.js; do node --check "$f"; done

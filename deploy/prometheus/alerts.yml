@@ -5,11 +5,13 @@ groups:
     rules:
       - record: bookmind:api_errors:ratio_rate5m
         expr: |
-          sum(rate(bookmind_http_requests_total{service="gateway",status=~"5.."}[5m]))
+          # "or vector(0)": with no errors at all, report 0% rather than "no data".
+          (sum(rate(bookmind_http_requests_total{service="gateway",status=~"5.."}[5m])) or vector(0))
           / clamp_min(sum(rate(bookmind_http_requests_total{service="gateway"}[5m])), 1e-9)
       - record: bookmind:api_errors:ratio_rate1h
         expr: |
-          sum(rate(bookmind_http_requests_total{service="gateway",status=~"5.."}[1h]))
+          # "or vector(0)": with no errors at all, report 0% rather than "no data".
+          (sum(rate(bookmind_http_requests_total{service="gateway",status=~"5.."}[1h])) or vector(0))
           / clamp_min(sum(rate(bookmind_http_requests_total{service="gateway"}[1h])), 1e-9)
 
       # Multi-window burn-rate alert (Google SRE workbook): 14.4x burn on a 0.5% error budget.
@@ -40,7 +42,7 @@ groups:
 
       - alert: BookMindModelDegraded
         expr: |
-          sum(rate(bookmind_research_generations_total{source="extractive"}[15m]))
+          (sum(rate(bookmind_research_generations_total{source="extractive"}[15m])) or vector(0))
           / clamp_min(sum(rate(bookmind_research_generations_total{source=~"model|extractive"}[15m])), 1e-9) > 0.5
         for: 15m
         labels: { severity: ticket }
@@ -52,6 +54,23 @@ groups:
         labels: { severity: ticket }
         annotations:
           summary: "Events were dead-lettered on {{ $labels.topic }} — inspect the DLQ"
+
+      # With DNS service discovery a stopped container disappears from the target list instead
+      # of reporting up == 0, so "down" alone would never fire. Alert when a service has no
+      # scrape targets at all.
+      - alert: BookMindServiceMissing
+        expr: |
+          absent(up{job="bookmind", service="gateway"})
+          or absent(up{job="bookmind", service="catalog"})
+          or absent(up{job="bookmind", service="search"})
+          or absent(up{job="bookmind", service="research"})
+          or absent(up{job="bookmind", service="notebook"})
+          or absent(up{job="bookmind", service="websearch"})
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "No running instance of {{ $labels.service }} is being scraped"
+          runbook: "docs/ARCHITECTURE.md#runbook"
 
       - alert: BookMindTargetDown
         expr: up{job="bookmind"} == 0

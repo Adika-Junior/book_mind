@@ -217,4 +217,5 @@ broker-neutral.
 | Search doesn't show a new note | `GET notebook /v1/outbox` backlog; search logs | Backlog > 0 means the broker is unreachable (the relay retries). Restarting a search replica rebuilds its projection from snapshot + stream. |
 | Need to switch the model off now | — | `HSET bm:flags llm_enabled false` (all replicas, ≤2 s), or edit `flags.json`. |
 | Rotate the login password | — | Overwrite `secrets/auth_password.txt` (or the Vault key). The next request uses it; no restart. |
+| `BookMindServiceMissing` | `docker compose ps` / `kubectl -n bookmind get pods` | A service has no running instance. Start or roll back that service; readers keep the cached book meanwhile (stale-on-error). |
 | Roll back a release | `kubectl -n bookmind rollout history deploy/gateway` | `kubectl -n bookmind rollout undo deploy/<name>`. |

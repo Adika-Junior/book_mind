@@ -124,6 +124,27 @@ Offline mode needs HTTPS (browsers only allow service workers on HTTPS or `local
 
 ---
 
+## Updating or adding documents
+
+When the Bill is amended, or to read other documents, rebuild the page data from PDFs:
+
+```bash
+pip install pypdf
+cat > docs.json <<'JSON'
+[
+  {"doc": "strategy", "title": "Kenya Artificial Intelligence Strategy 2025-2030", "short": "Strategy", "pdf": "sources/strategy.pdf"},
+  {"doc": "bill", "title": "The Artificial Intelligence Bill, 2026 (Senate Bill No. 4)", "short": "Bill", "pdf": "sources/bill.pdf"}
+]
+JSON
+python tools/ingest.py docs.json --report report.json    # writes data/chunks.json
+```
+
+It repairs common PDF extraction damage, removes running headers and page-number footers, and
+lists pages without a text layer (scans). Add `--ocr` to recognise those with Tesseract
+(`apt install poppler-utils tesseract-ocr`). Structure (headings, clauses, lists) is rebuilt by the
+reader automatically. Restart BookMind (or redeploy) to serve the new data; each device picks it
+up on its next visit, and saved notes keep pointing at the same document and page.
+
 ## Project layout
 
 ```
@@ -132,10 +153,12 @@ bookmind/
                  event bus (memory / Redis Streams), RPC + discovery, idempotency, saga
   services/      gateway · catalog · search · research · notebook   (one ASGI app each)
   local.py       single-process wiring        serve.py   container entrypoint (SERVICE=…)
+tools/           ingest.py (PDFs → data/chunks.json) · themes.py (palettes → themes.css, contrast-checked)
 web/             offline-first PWA (no build step, no CDN): index.html, css/, js/, sw.js
 data/chunks.json the four documents, page by page
 deploy/          docker-compose, nginx edge, prometheus/alertmanager/grafana/promtail, k8s
-tests/           unit + end-to-end tests (Redis backends run when TEST_REDIS_URL is set)
+tests/           unit + integration tests (Redis backends run when TEST_REDIS_URL is set)
+tests/e2e/       browser tests (Playwright, desktop + phone, axe-core accessibility audit)
 docs/            ARCHITECTURE.md (blueprint → implementation), original design notes
 ```
 
@@ -144,6 +167,7 @@ docs/            ARCHITECTURE.md (blueprint → implementation), original design
 ```bash
 pip install -r requirements-dev.txt
 ruff check . && pytest -q && node --test "tests/js/*.test.mjs"
+(cd tests/e2e && npm ci && npx playwright install chromium && npx playwright test)   # browser tests
 python tools/themes.py            # regenerate web/css/themes.css after editing a palette
 TEST_REDIS_URL=redis://localhost:6379/0 pytest -q     # also exercise the Redis backends
 ```

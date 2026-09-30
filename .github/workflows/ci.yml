@@ -23,7 +23,7 @@ jobs:
         ports: ["6379:6379"]
         options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with: { python-version: "3.12", cache: pip, cache-dependency-path: requirements-dev.txt }
       - run: pip install -r requirements-dev.txt
@@ -46,7 +46,7 @@ jobs:
   manifests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Regenerate manifests and fail if they drift from what is committed
         run: python deploy/k8s/generate.py && git diff --exit-code deploy/k8s
       - name: Validate Kubernetes manifests
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { contents: read, packages: write }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-kubectl@v4
       - name: Configure cluster access
         run: echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > "$RUNNER_TEMP/kubeconfig"

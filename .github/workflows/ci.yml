@@ -38,6 +38,10 @@ jobs:
         with: { node-version: "22" }
       - name: Frontend syntax check
         run: for f in web/js/*.js web/sw.js; do node --check "$f"; done
+      - name: Text-structure tests (reflow, headings, no content lost)
+        run: node --test "tests/js/*.test.mjs"
+      - name: Palette contrast (WCAG) and generated CSS is up to date
+        run: python tools/themes.py --check
 
   manifests:
     runs-on: ubuntu-latest

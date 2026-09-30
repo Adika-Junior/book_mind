@@ -418,11 +418,11 @@ def _static(path: str) -> Response:
         raise HTTPException(404)
     # The service worker versions assets itself (and fetches with cache: "reload"), so a short
     # HTTP cache is enough; entry points are always revalidated so updates are noticed promptly.
-    cache = "no-cache" if target.name in NO_CACHE else "public, max-age=3600"
+    cache = "no-cache" if target.name in NO_CACHE else "public, max-age=604800, immutable" if target.suffix == ".woff2" else "public, max-age=3600"
     headers = {"Cache-Control": cache}
     if target.name == "sw.js":
         headers["Service-Worker-Allowed"] = "/"
-    media = "application/manifest+json" if target.suffix == ".webmanifest" else None
+    media = {".webmanifest": "application/manifest+json", ".woff2": "font/woff2"}.get(target.suffix)
     return FileResponse(target, headers=headers, media_type=media)
 
 

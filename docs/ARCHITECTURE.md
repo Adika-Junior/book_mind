@@ -182,10 +182,10 @@ broker-neutral.
   (where the OS menu is above). Keyboard shortcuts (← → space / n Esc), reduced-motion
   support, lock-screen media controls (Media Session), screen wake-lock while reading aloud,
   and print styles.
-- **Palette**: `#fbf5a3` cream · `#d8901e` amber · `#7f400e` umber · `#1e0f0a` espresso,
-  with light and dark themes. Every text/background pair meets WCAG AA: espresso on cream is 16.6:1, amber on espresso
-  7.0:1, umber on the page 7.8:1. Amber is only ever a fill or accent behind dark text,
-  never text on cream.
+- **Palettes and typography**: three contrast-checked palettes (Golden Hour, Coastal Linen,
+  Terracotta Garden) × light/dark, bundled open-licensed reading fonts, reader-controlled size,
+  leading, measure and spacing, and structure rebuilt from the PDFs. The research and psychology
+  behind every choice is in [READING-DESIGN.md](READING-DESIGN.md).
 
 > Service workers require a **secure context**: HTTPS or `localhost`. On a phone reaching your
 > laptop over Wi-Fi, use the compose edge with a trusted certificate (`mkcert`) or a real

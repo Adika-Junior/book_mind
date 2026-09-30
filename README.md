@@ -14,7 +14,12 @@ from a **local, free, open-weight model**, and keep a notebook that syncs across
   metrics, SLO alerts, secrets, Kubernetes, CI/CD. See
   **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
-Palette: `#fbf5a3` cream · `#d8901e` amber · `#7f400e` umber · `#1e0f0a` espresso.
+- 🎨 **Three palettes, your text style.** Golden Hour, Coastal Linen and Terracotta Garden
+  (light and dark, every text pair contrast-checked), plus a choice of reading typeface
+  (Literata, Atkinson Hyperlegible, …), size, line spacing, line length and dyslexia-friendly
+  spacing. Why each default was chosen: **[docs/READING-DESIGN.md](docs/READING-DESIGN.md)**.
+- 🧭 **Structure you can follow.** Real headings and clause lists rebuilt from the PDFs, a
+  contents sidebar, a live "you are here" breadcrumb, time left, and an "Up next" signpost.
 
 ---
 
@@ -89,7 +94,9 @@ Offline mode needs HTTPS (browsers only allow service workers on HTTPS or `local
 
 | Action | How |
 |---|---|
-| Turn pages | ← → buttons, arrow keys, swipe, or type a page number |
+| Turn pages | ← → buttons, arrow keys, swipe, type a page number, or jump from **Contents** in the sidebar |
+| Change the look | **Aa**: palette, brightness, typeface, size, line spacing, line length, letter spacing, focus |
+| Look up a term | Tap a dotted-underlined term for the Bill's own definition |
 | Listen | ▶ (Space). Choose voice / speed / text size in the bar (⚙ on phones). Tap a sentence to jump there. Lock-screen controls work. |
 | Research / Simplify | Select text → **Research**, **Simplify** or **Read from here** |
 | Search | 🔍 or `/`. Searches all four documents and your notes, online or offline. |
@@ -117,7 +124,8 @@ docs/            ARCHITECTURE.md (blueprint → implementation), original design
 
 ```bash
 pip install -r requirements-dev.txt
-ruff check . && pytest -q
+ruff check . && pytest -q && node --test "tests/js/*.test.mjs"
+python tools/themes.py            # regenerate web/css/themes.css after editing a palette
 TEST_REDIS_URL=redis://localhost:6379/0 pytest -q     # also exercise the Redis backends
 ```
 

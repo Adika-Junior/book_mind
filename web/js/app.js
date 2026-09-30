@@ -3,7 +3,8 @@
 
 import { api, HttpError, SyncEngine } from "./net.js";
 import { escapeHtml, renderMD } from "./md.js";
-import { excerpt, extractiveAnswer, searchNotes, searchPassages, tokenize } from "./search.js";
+import { definitions, excerpt, extractiveAnswer, searchNotes, searchPassages, tokenize } from "./search.js";
+import { buildOutline, nextHeading, sectionAt, structure } from "./structure.js";
 import * as store from "./store.js";
 
 const $ = (id) => document.getElementById(id);
@@ -57,39 +58,240 @@ const docByShort = (short) => state.docs.find((d) => d.short.toLowerCase() === S
 
 /* =========================================================== reader */
 
-function splitSentences(text) {
-  const paras = text.split(/\n{2,}|\n(?=[A-Z(])/).map((p) => p.trim()).filter(Boolean);
-  return paras.map((p) => (p.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [p]).map((s) => s.trim()).filter(Boolean));
+const WPM = 230; // typical adult silent reading rate for non-fiction (Brysbaert 2019: ~238)
+const outlines = {};
+const outlineOf = (docId) => (outlines[docId] ||= buildOutline(state.byId[docId].chunks, docId));
+const sentencesOf = (text) => (text.match(/[^.!?]+[.!?]+["”’)]?(\s+|$)|[^.!?]+$/g) || [text]).map((s) => s.trim()).filter(Boolean);
+const minutes = (words) => Math.max(1, Math.round(words / WPM));
+
+/* Defined terms from the Bill's interpretation clause, signalled on first use per page. */
+let termRe = null;
+const termByLower = new Map();
+function termRegex() {
+  if (termRe !== null) return termRe;
+  const defs = definitions(state.chunks).filter((d) => d.term.length >= 4);
+  defs.forEach((d) => termByLower.set(d.term.toLowerCase(), d));
+  const alts = defs.map((d) => d.term).sort((a, b) => b.length - a.length).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  termRe = alts.length ? new RegExp(`\\b(${alts.join("|")})\\b`, "gi") : false;
+  return termRe;
+}
+
+function appendWithTerms(target, text, seen) {
+  const re = termRegex();
+  if (!re) { target.append(text); return; }
+  let last = 0, m;
+  re.lastIndex = 0;
+  while ((m = re.exec(text))) {
+    const def = termByLower.get(m[0].toLowerCase());
+    const onOwnPage = def && def.doc === state.doc && def.page === state.idx + 1;
+    // Capitalised defined terms ("Office", "Commissioner") only match their capitalised use.
+    if (!def || onOwnPage || seen.has(def.term) || (/[A-Z]/.test(def.term[0]) && !/[A-Z]/.test(m[0][0]))) continue;
+    seen.add(def.term);
+    target.append(text.slice(last, m.index));
+    // An inline link (not a <button>) so a multi-word term can wrap across lines like normal text.
+    const b = document.createElement("a");
+    b.href = "#";
+    b.setAttribute("role", "button");
+    b.className = "term";
+    b.textContent = m[0];
+    b.dataset.term = def.term;
+    b.setAttribute("aria-haspopup", "dialog");
+    b.setAttribute("aria-expanded", "false");
+    b.title = "Defined term — tap for the Bill's definition";
+    target.append(b);
+    last = m.index + m[0].length;
+  }
+  target.append(text.slice(last));
+}
+
+function appendSentences(el, text, counter, seen) {
+  for (const s of sentencesOf(text)) {
+    const span = document.createElement("span");
+    span.className = "sentence";
+    span.dataset.si = String(counter.n++);
+    appendWithTerms(span, s + " ", seen);
+    el.appendChild(span);
+  }
+}
+
+function renderBlocks(body, chunk, docId) {
+  body.textContent = "";
+  body.classList.remove("has-current");
+  const counter = { n: 0 };
+  const seen = new Set();
+  for (const b of structure(chunk.text, docId)) {
+    let el;
+    if (b.type === "sec" || b.type === "sub") {
+      el = document.createElement(b.type === "sec" ? "h2" : "h3");
+      el.className = b.type;
+      const span = document.createElement("span");
+      span.className = "sentence";
+      span.dataset.si = String(counter.n++);
+      if (b.num) {
+        const n = document.createElement("span");
+        n.className = "num";
+        n.textContent = b.num;
+        span.append(n, " ");
+      }
+      span.append(b.text || "");
+      el.appendChild(span);
+      el.dataset.level = b.type === "sec" ? "2" : "3";
+      el.dataset.label = [b.num, b.text].filter(Boolean).join(" — ");
+    } else if (b.type === "q") {
+      el = document.createElement("h3");
+      el.className = "q";
+      el.dataset.level = "3";
+      el.dataset.label = b.text;
+      appendSentences(el, b.text, counter, seen);
+    } else if (b.type === "item") {
+      el = document.createElement("div");
+      el.className = `item depth-${b.depth || 1}`;
+      const marker = document.createElement("span");
+      marker.className = "marker" + (b.marker === "•" ? " bullet" : "");
+      marker.setAttribute("aria-hidden", b.marker === "•" ? "true" : "false");
+      marker.textContent = b.marker;
+      const text = document.createElement("div");
+      appendSentences(text, b.text, counter, seen);
+      el.append(marker, text);
+    } else if (b.type === "toc") {
+      const hint = document.createElement("p");
+      hint.className = "note-hint";
+      hint.textContent = "This is the document's own contents page. The Contents list in the sidebar jumps straight to each section.";
+      body.appendChild(hint);
+      el = document.createElement("div");
+      el.className = "toc";
+      el.textContent = b.text;
+    } else {
+      el = document.createElement("p");
+      appendSentences(el, b.text, counter, seen);
+    }
+    body.appendChild(el);
+  }
+}
+
+function renderKicker(d, c) {
+  const wordsLeft = d.chunks.slice(state.idx).reduce((a, x) => a + (x.words || 200), 0);
+  $("pageNo").textContent = `Page ${state.idx + 1} of ${d.chunks.length}`;
+  $("timeLeft").textContent = `About ${minutes(c.words || 200)} min for this page · ${minutes(wordsLeft)} min left in ${d.short}`;
+}
+
+/* "You are here": the section you entered the page in, updated by the headings you scroll past. */
+let lastCrumbs = "";
+function updateCrumbs() {
+  const d = DOC();
+  if (!d) return;
+  const outline = outlineOf(d.id);
+  let { sec, sub } = sectionAt(outline.filter((o) => o.idx < state.idx), state.idx);
+  let secLabel = sec && sec.label, subLabel = sub && sub.label;
+  const scroller = $("readerScroll").getBoundingClientRect();
+  const line = scroller.top + scroller.height * 0.35;
+  for (const h of $("pageBody").querySelectorAll("[data-level]")) {
+    if (h.getBoundingClientRect().top > line) break;
+    if (h.dataset.level === "2") { secLabel = h.dataset.label; subLabel = null; } else subLabel = h.dataset.label;
+  }
+  const labels = [d.short, secLabel, subLabel].filter(Boolean);
+  const key = labels.join("|");
+  if (key === lastCrumbs) return;
+  lastCrumbs = key;
+  const crumbs = $("crumbs");
+  crumbs.textContent = "";
+  for (const label of labels) {
+    const li = document.createElement("li");
+    li.textContent = label;
+    li.title = label;
+    crumbs.appendChild(li);
+  }
+  markOutline(secLabel, subLabel);
+  const short = (secLabel || `page ${state.idx + 1}`);
+  $("brandSub").textContent = `${d.short} · ${short.length > 42 ? short.slice(0, 40) + "…" : short}`;
+}
+
+function renderUpNext(d) {
+  const box = $("upNext");
+  box.textContent = "";
+  const outline = outlineOf(d.id);
+  const upcoming = nextHeading(outline, state.idx);
+  const di = state.order.indexOf(d.id);
+  const nextDoc = state.idx === d.chunks.length - 1 && di < state.order.length - 1 ? state.byId[state.order[di + 1]] : null;
+  const pct = Math.round(((state.idx + 1) / d.chunks.length) * 100);
+
+  const label = document.createElement("div");
+  label.className = "label";
+  const title = document.createElement("div");
+  title.className = "title";
+  if (nextDoc) { label.textContent = "You've finished this document — up next"; title.textContent = nextDoc.title; }
+  else if (upcoming) {
+    const away = upcoming.idx - state.idx;
+    label.textContent = away === 1 ? "Up next, on the next page" : `Up next, in ${away} pages`;
+    title.textContent = upcoming.label;
+  } else if (state.idx < d.chunks.length - 1) { label.textContent = "Up next"; title.textContent = `Page ${state.idx + 2} of ${d.short}`; }
+  else { label.textContent = "The end"; title.textContent = "You've reached the end of all four documents."; }
+
+  const meter = document.createElement("div");
+  meter.className = "meter";
+  meter.setAttribute("role", "img");
+  meter.setAttribute("aria-label", `${pct}% of ${d.short} read`);
+  const fill = document.createElement("span");
+  fill.style.width = pct + "%";
+  meter.appendChild(fill);
+
+  const row = document.createElement("div");
+  row.className = "row";
+  const where = document.createElement("span");
+  where.textContent = pct >= 100 ? `${d.short} complete` : `${pct}% of ${d.short} read`;
+  row.appendChild(where);
+  if (state.idx < d.chunks.length - 1 || nextDoc) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn small";
+    btn.textContent = nextDoc ? `Start ${nextDoc.short}` : "Continue reading";
+    btn.addEventListener("click", () => nextPage());
+    row.appendChild(btn);
+  }
+  box.append(label, title, meter, row);
+}
+
+let progressRaf = 0;
+function updateDocProgress() {
+  cancelAnimationFrame(progressRaf);
+  progressRaf = requestAnimationFrame(() => {
+    const d = DOC();
+    if (!d) return;
+    const sc = $("readerScroll");
+    const within = sc.scrollHeight > sc.clientHeight ? sc.scrollTop / (sc.scrollHeight - sc.clientHeight) : 1;
+    const pct = Math.min(100, ((state.idx + within) / d.chunks.length) * 100);
+    $("docProgressFill").style.width = pct.toFixed(2) + "%";
+    $("docProgress").setAttribute("aria-valuenow", String(Math.round(pct)));
+    updateCrumbs();
+  });
+}
+
+function setCurrentBlock(node) {
+  const body = $("pageBody");
+  const block = node && node.closest && node.closest(".page-body > *");
+  if (!block) return;
+  body.querySelectorAll(":scope > .current").forEach((el) => el !== block && el.classList.remove("current"));
+  block.classList.add("current");
+  body.classList.add("has-current");
 }
 
 function renderPage({ keepSpeech = false } = {}) {
   const d = DOC();
   const c = d.chunks[state.idx];
-  $("pageDoc").textContent = d.title;
-  $("pageNo").textContent = `Page ${state.idx + 1} of ${d.chunks.length} · ~${Math.max(1, Math.round((c.words || 200) / 220))} min read`;
-  $("brandSub").textContent = `${d.short} · page ${state.idx + 1}`;
+  renderKicker(d, c);
   $("pageInput").value = state.idx + 1;
   $("pageInput").max = d.chunks.length;
   $("pageTotal").textContent = `of ${d.chunks.length}`;
+  renderBlocks($("pageBody"), c, d.id);
+  renderUpNext(d);
+  closeTermPop();
 
-  const body = $("pageBody");
-  body.textContent = "";
-  let si = 0;
-  for (const sents of splitSentences(c.text)) {
-    const p = document.createElement("p");
-    for (const s of sents) {
-      const span = document.createElement("span");
-      span.className = "sentence";
-      span.dataset.si = String(si++);
-      span.textContent = s + " ";
-      p.appendChild(span);
-    }
-    body.appendChild(p);
-  }
   const di = state.order.indexOf(state.doc);
   $("prevBtn").disabled = state.idx === 0 && di === 0;
   $("nextBtn").disabled = state.idx === d.chunks.length - 1 && di === state.order.length - 1;
   $("readerScroll").scrollTop = 0;
+  lastCrumbs = "";
+  updateDocProgress();
 
   store.prefs.set("pos", { doc: state.doc, idx: state.idx });
   const progress = store.prefs.get("progress", {});
@@ -97,6 +299,47 @@ function renderPage({ keepSpeech = false } = {}) {
   renderNav();
   if (!keepSpeech) { tts.stop(); setStatus("Press play to hear this page."); }
   else tts.updateMedia();
+}
+
+/* =========================================================== defined-term popover */
+
+let termPop = null;
+function closeTermPop() {
+  if (!termPop) return;
+  termPop.btn.setAttribute("aria-expanded", "false");
+  termPop.el.remove();
+  termPop = null;
+}
+function openTermPop(btn) {
+  closeTermPop();
+  const def = termByLower.get(btn.dataset.term.toLowerCase());
+  if (!def) return;
+  const el = document.createElement("div");
+  el.className = "term-pop";
+  el.setAttribute("role", "dialog");
+  el.setAttribute("aria-label", `Definition of ${def.term}`);
+  const strong = document.createElement("strong");
+  strong.textContent = def.term;
+  const body = document.createElement("span");
+  body.textContent = " " + excerpt(def.definition, 420);
+  const src = document.createElement("span");
+  src.className = "src";
+  const link = document.createElement("a");
+  link.href = "#";
+  link.className = "ref";
+  link.textContent = `${def.docShort}, p.${def.page}`;
+  link.addEventListener("click", (e) => { e.preventDefault(); closeTermPop(); goTo(def.doc, def.page - 1, { jump: true }); });
+  src.append("Defined in ", link);
+  el.append(strong, body, src);
+  document.body.appendChild(el);
+  const r = btn.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let top = r.bottom + 8;
+  if (top + h > innerHeight - 80) top = Math.max(8, r.top - h - 8);
+  el.style.top = `${Math.round(top)}px`;
+  el.style.left = `${Math.round(Math.min(innerWidth - w - 12, Math.max(12, r.left + r.width / 2 - w / 2)))}px`;
+  btn.setAttribute("aria-expanded", "true");
+  termPop = { el, btn };
 }
 
 function goTo(docId, idx, opts = {}) {
@@ -137,7 +380,53 @@ function highlightQuery(q) {
 
 /* =========================================================== navigation drawer */
 
+function renderOutline() {
+  const ul = $("outline");
+  ul.textContent = "";
+  const d = DOC();
+  $("outlineTitle").textContent = `Contents · ${d.short}`;
+  const outline = outlineOf(d.id);
+  const readUpTo = store.prefs.get("progress", {})[d.id] ?? -1;
+  outline.forEach((item, i) => {
+    const li = document.createElement("li");
+    li.className = `lvl-${item.level}`;
+    li.dataset.i = String(i);
+    const nextStart = outline.slice(i + 1).find((o) => o.idx > item.idx);
+    if (nextStart && nextStart.idx <= readUpTo) li.classList.add("done");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = item.label;
+    b.addEventListener("click", () => { goTo(d.id, item.idx, { jump: true }); if (!mq.nav.matches) closeNav(); });
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+}
+
+/** Highlight the outline entries for the section you're in (same source of truth as the crumbs). */
+function markOutline(secLabel, subLabel) {
+  const d = DOC();
+  const outline = outlineOf(d.id);
+  const ul = $("outline");
+  const find = (label, level) => {
+    if (!label) return -1;
+    // Nearest matching entry at or before this page (labels can repeat across a document).
+    for (let i = outline.length - 1; i >= 0; i--) if (outline[i].idx <= state.idx && outline[i].level === level && outline[i].label.startsWith(label.slice(0, 80))) return i;
+    return -1;
+  };
+  const secI = find(secLabel, 2), subI = find(subLabel, 3);
+  let focus = null;
+  ul.querySelectorAll("li").forEach((li) => {
+    const i = Number(li.dataset.i);
+    const isCur = i === (subI >= 0 ? subI : secI);
+    li.classList.toggle("current", i === secI || i === subI);
+    li.firstChild.toggleAttribute("aria-current", isCur);
+    if (isCur) { li.firstChild.setAttribute("aria-current", "location"); focus = li; }
+  });
+  if (focus) ul.scrollTop = Math.max(0, focus.offsetTop - ul.offsetTop - ul.clientHeight / 2);
+}
+
 function renderNav() {
+  renderOutline();
   const list = $("docList");
   list.textContent = "";
   const progress = store.prefs.get("progress", {});
@@ -223,6 +512,7 @@ const tts = {
     spans.forEach((s, k) => { s.classList.toggle("spoken", k < i); s.classList.remove("reading"); });
     const span = spans[i];
     span.classList.add("reading");
+    setCurrentBlock(span);
     if (!isElementVisible(span)) span.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     const u = new SpeechSynthesisUtterance(span.textContent);
     const v = this.voice();
@@ -590,15 +880,47 @@ addEventListener("appinstalled", () => { $("installBtn").hidden = true; toast("B
 
 /* =========================================================== theme & text size */
 
-function applyTheme(theme) {
-  if (theme) document.documentElement.dataset.theme = theme;
-  const dark = theme ? theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+const DEFAULT_PREFS = { palette: "golden", theme: "auto", font: "literata", size: 19, leading: 1.65, measure: 66, spacing: "normal", focus: "off" };
+const pref = (k) => store.prefs.get(k, DEFAULT_PREFS[k]);
+
+function applyPrefs() {
+  const root = document.documentElement;
+  root.dataset.palette = pref("palette");
+  const theme = pref("theme");
+  if (theme === "auto") delete root.dataset.theme; else root.dataset.theme = theme;
+  root.dataset.font = pref("font");
+  root.dataset.spacing = pref("spacing");
+  root.dataset.focus = pref("focus");
+  root.style.setProperty("--reader-size", `${pref("size")}px`);
+  root.style.setProperty("--reader-leading", String(pref("leading")));
+  root.style.setProperty("--reader-measure", `${pref("measure")}ch`);
+  const dark = theme === "auto" ? matchMedia("(prefers-color-scheme: dark)").matches : theme === "dark";
   $("themeIcon").setAttribute("href", dark ? "#i-sun" : "#i-moon");
-  document.querySelector('meta[name="theme-color"]').content = dark ? "#150a06" : "#1e0f0a";
+  // Browser/OS chrome (Android status bar, installed-app title bar) follows the palette too.
+  requestAnimationFrame(() => {
+    const chrome = getComputedStyle(root).getPropertyValue("--chrome").trim();
+    if (chrome) document.querySelector('meta[name="theme-color"]').content = chrome;
+  });
+  // Reflect state in the settings panel.
+  document.querySelectorAll("#paletteOpts .palette-opt").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === pref("palette"))));
+  document.querySelectorAll("#settingsPanel .seg[data-pref]").forEach((seg) => {
+    const current = String(pref(seg.dataset.pref));
+    seg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === current)));
+  });
+  $("sizeRange").value = pref("size");
+  $("sizeOut").textContent = `${pref("size")}px`;
+  updateDocProgress();
 }
-function applySize(px) {
-  document.documentElement.style.setProperty("--reader-size", px + "px");
-  $("sizeRange").value = px; $("sizeRangeM").value = px;
+
+function setPref(key, value) {
+  store.prefs.set(key, value);
+  applyPrefs();
+}
+
+function openSettings(open) {
+  $("settingsPanel").hidden = !open;
+  $("settingsBtn").setAttribute("aria-expanded", String(open));
+  if (open) { $("audioPopover").hidden = true; ($("settingsPanel").querySelector('[aria-pressed="true"]') || $("sizeRange")).focus(); }
 }
 
 /* =========================================================== wiring */
@@ -616,11 +938,39 @@ function wire() {
   mq.nav.addEventListener("change", (e) => { e.matches ? openNav() : closeNav(); });
   mq.panel.addEventListener("change", () => { if ($("notebook").classList.contains("open")) openNotebook(); });
 
+  // Reading settings
+  $("settingsBtn").addEventListener("click", () => openSettings($("settingsPanel").hidden));
+  $("paletteOpts").addEventListener("click", (e) => { const b = e.target.closest(".palette-opt"); if (b) setPref("palette", b.dataset.v); });
+  document.querySelectorAll("#settingsPanel .seg[data-pref]").forEach((seg) => seg.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-v]");
+    if (!b) return;
+    const numeric = ["leading", "measure"].includes(seg.dataset.pref);
+    setPref(seg.dataset.pref, numeric ? Number(b.dataset.v) : b.dataset.v);
+  }));
+  $("sizeRange").addEventListener("input", (e) => setPref("size", Number(e.target.value)));
+  $("resetReading").addEventListener("click", () => {
+    for (const k of Object.keys(DEFAULT_PREFS)) if (k !== "palette" && k !== "theme") store.prefs.set(k, DEFAULT_PREFS[k]);
+    applyPrefs();
+    toast("Text settings reset to the recommended defaults.");
+  });
+  document.addEventListener("click", (e) => {
+    if (!$("settingsPanel").hidden && !e.target.closest("#settingsPanel, #settingsBtn")) openSettings(false);
+    if (termPop && !e.target.closest(".term-pop, .term")) closeTermPop();
+  });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyPrefs);
+
+  // Structure: defined terms, focus mode, progress
+  $("pageBody").addEventListener("click", (e) => {
+    const term = e.target.closest(".term");
+    if (term) { e.preventDefault(); e.stopPropagation(); termPop && termPop.btn === term ? closeTermPop() : openTermPop(term); return; }
+    setCurrentBlock(e.target);
+  });
+  $("pageBody").addEventListener("pointerover", (e) => { if (!mq.coarse.matches && !tts.playing) setCurrentBlock(e.target); });
+  $("readerScroll").addEventListener("scroll", () => { updateDocProgress(); closeTermPop(); }, { passive: true });
+
   $("themeBtn").addEventListener("click", () => {
     const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-    const next = cur === "dark" ? "light" : "dark";
-    store.prefs.set("theme", next);
-    applyTheme(next);
+    setPref("theme", cur === "dark" ? "light" : "dark");
   });
 
   // Read aloud
@@ -633,7 +983,6 @@ function wire() {
     }
   };
   syncControl("rateRange", "rateRangeM", "rate", () => tts.playing && tts.play(tts.index));
-  syncControl("sizeRange", "sizeRangeM", "size", (v) => applySize(v));
   for (const id of ["voiceSelect", "voiceSelectM"]) $(id).addEventListener("change", () => { const v = $(id).value; $("voiceSelect").value = v; $("voiceSelectM").value = v; store.prefs.set("voice", v); if (tts.playing) tts.play(tts.index); });
   $("rateRange").value = $("rateRangeM").value = store.prefs.get("rate", 1);
   $("audioMore").addEventListener("click", () => {
@@ -709,6 +1058,8 @@ function wire() {
   // Keyboard
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (termPop) return closeTermPop();
+      if (!$("settingsPanel").hidden) { openSettings(false); $("settingsBtn").focus(); return; }
       if (!$("searchDialog").hidden) return closeSearch();
       if (!$("audioPopover").hidden) { $("audioPopover").hidden = true; return; }
       hideToolbar();
@@ -730,8 +1081,7 @@ function wire() {
 /* =========================================================== boot */
 
 async function boot() {
-  applyTheme(store.prefs.get("theme"));
-  applySize(store.prefs.get("size", 18));
+  applyPrefs();
   registerSW();
   store.requestPersistence();
   try {

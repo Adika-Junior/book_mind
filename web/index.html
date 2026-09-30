@@ -15,7 +15,11 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="preload" href="/fonts/literata-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/css/themes.css">
 <link rel="stylesheet" href="/css/app.css">
+<!-- Applies the saved palette/theme/font before first paint (no flash of the wrong colours). -->
+<script src="/js/prefs-boot.js"></script>
 <script type="module" src="/js/app.js"></script>
 </head>
 <body>
@@ -36,6 +40,7 @@
   <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></symbol>
   <symbol id="i-speak" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-type" viewBox="0 0 24 24"><path d="M3 19 8.5 5h1L15 19M5.2 14h7.6M15.5 19l3-8 3 8M16.4 16.5h4.2"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/></symbol>
 </svg>
 
@@ -50,16 +55,20 @@
   </div>
   <span class="chip" id="netChip" hidden><span class="dot"></span><span id="netText"></span></span>
   <button class="iconbtn" id="searchBtn" aria-label="Search the documents and your notes (/)"><svg class="icon"><use href="#i-search"/></svg></button>
+  <button class="iconbtn" id="settingsBtn" aria-label="Reading settings: colours, typeface, size and spacing" aria-expanded="false" aria-controls="settingsPanel"><svg class="icon"><use href="#i-type"/></svg></button>
   <button class="iconbtn" id="themeBtn" aria-label="Switch light or dark theme"><svg class="icon"><use id="themeIcon" href="#i-moon"/></svg></button>
   <button class="iconbtn" id="notebookBtn" aria-label="Notebook" aria-expanded="false" aria-controls="notebook"><svg class="icon"><use href="#i-book"/></svg><span class="badge" id="noteCount" hidden></span></button>
 </header>
 
+<div class="reading-progress" role="progressbar" aria-label="Progress through this document" aria-valuemin="0" aria-valuemax="100" id="docProgress"><span id="docProgressFill"></span></div>
 <div class="banner" id="updateBanner" hidden role="status"><p>A new version of BookMind is ready.</p><button id="updateBtn" type="button">Reload</button></div>
 <div class="banner info" id="noticeBanner" hidden role="status"><p id="noticeText"></p><button id="noticeClose" type="button" aria-label="Dismiss">OK</button></div>
 
 <div class="shell">
   <nav class="nav" id="nav" aria-label="Documents">
     <div id="resumeCard"></div>
+    <h2 id="outlineTitle">Contents</h2>
+    <ul class="outline" id="outline" aria-labelledby="outlineTitle"></ul>
     <h2>Documents</h2>
     <div id="docList"></div>
     <h2>This device</h2>
@@ -77,17 +86,20 @@
 
   <main class="reader" id="reader">
     <div class="reader-scroll" id="readerScroll">
-      <article class="page" id="page" aria-live="polite">
-        <div class="page-kicker">
-          <span class="doc-title" id="pageDoc">Loading…</span>
-          <span class="page-no" id="pageNo"></span>
-        </div>
-        <div class="page-body" id="pageBody"></div>
+      <div class="column">
+      <article class="page" id="page">
+        <header class="page-kicker">
+          <nav aria-label="You are here"><ol class="crumbs" id="crumbs"><li>Loading…</li></ol></nav>
+          <div class="page-meta"><span id="pageNo"></span><span id="timeLeft"></span></div>
+        </header>
+        <div class="page-body" id="pageBody" aria-live="polite"></div>
+        <section class="up-next" id="upNext" aria-label="What comes next"></section>
       </article>
       <div class="pager">
         <button class="btn ghost" id="prevBtn" type="button" aria-label="Previous page"><svg class="icon"><use href="#i-left"/></svg><span class="label">Previous</span></button>
         <label class="pos"><span>Page</span><input id="pageInput" type="number" inputmode="numeric" min="1" aria-label="Go to page"><span id="pageTotal"></span></label>
         <button class="btn ghost" id="nextBtn" type="button" aria-label="Next page"><span class="label">Next</span><svg class="icon"><use href="#i-right"/></svg></button>
+      </div>
       </div>
     </div>
   </main>
@@ -118,7 +130,6 @@
   <div class="audio-controls">
     <select id="voiceSelect" aria-label="Voice"></select>
     <label class="rate">Speed <input type="range" id="rateRange" min="0.6" max="1.8" step="0.1" value="1" aria-label="Reading speed"></label>
-    <label class="rate">Text <input type="range" id="sizeRange" min="15" max="26" step="1" value="18" aria-label="Text size"></label>
   </div>
   <button class="iconbtn" id="audioMore" type="button" aria-label="Voice, speed and text size" aria-expanded="false" aria-controls="audioPopover"><svg class="icon"><use href="#i-sliders"/></svg></button>
 </footer>
@@ -126,7 +137,51 @@
 <div class="popover" id="audioPopover" hidden>
   <label>Voice <select id="voiceSelectM"></select></label>
   <label>Reading speed <input type="range" id="rateRangeM" min="0.6" max="1.8" step="0.1" value="1"></label>
-  <label>Text size <input type="range" id="sizeRangeM" min="15" max="26" step="1" value="18"></label>
+</div>
+
+<div class="popover top" id="settingsPanel" hidden role="dialog" aria-label="Reading settings">
+  <div class="settings">
+    <fieldset>
+      <legend>Colour palette</legend>
+      <div class="seg" id="paletteOpts">
+        <button type="button" class="palette-opt" data-v="golden"><span class="swatch" data-palette="golden"></span>Golden Hour<small>Warm and focused, for long immersive reading.</small></button>
+        <button type="button" class="palette-opt" data-v="coastal"><span class="swatch" data-palette="coastal"></span>Coastal Linen<small>Cool and calm, for careful, analytical reading.</small></button>
+        <button type="button" class="palette-opt" data-v="terracotta"><span class="swatch" data-palette="terracotta"></span>Terracotta Garden<small>Earthy and grounded, for study and review.</small></button>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Brightness</legend>
+      <div class="seg" data-pref="theme"><button type="button" data-v="auto">Auto</button><button type="button" data-v="light">Light</button><button type="button" data-v="dark">Dark</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Typeface</legend>
+      <div class="seg" data-pref="font">
+        <button type="button" class="font-opt" data-v="literata">Literata</button>
+        <button type="button" class="font-opt" data-v="hyperlegible">Hyperlegible</button>
+        <button type="button" class="font-opt" data-v="system-serif">Classic serif</button>
+        <button type="button" class="font-opt" data-v="system-sans">Plain sans</button>
+      </div>
+    </fieldset>
+    <label>Text size <span id="sizeOut"></span><input type="range" id="sizeRange" min="15" max="28" step="1" aria-describedby="sizeOut"></label>
+    <fieldset>
+      <legend>Line spacing</legend>
+      <div class="seg" data-pref="leading"><button type="button" data-v="1.5">Snug</button><button type="button" data-v="1.65">Comfortable</button><button type="button" data-v="1.85">Airy</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Line length</legend>
+      <div class="seg" data-pref="measure"><button type="button" data-v="55">Narrow</button><button type="button" data-v="66">Medium</button><button type="button" data-v="75">Wide</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Letter spacing</legend>
+      <div class="seg" data-pref="spacing"><button type="button" data-v="normal">Normal</button><button type="button" data-v="wide">Extra (easier for dyslexia)</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Focus</legend>
+      <div class="seg" data-pref="focus"><button type="button" data-v="off">Whole page</button><button type="button" data-v="on">Dim other paragraphs</button></div>
+    </fieldset>
+    <p class="sample" id="typeSample">The Office shall promote the ethical, safe and inclusive use of artificial intelligence in Kenya — Il1 O0 rn/m.</p>
+    <button type="button" class="btn small" id="resetReading">Reset to recommended</button>
+  </div>
 </div>
 
 <div class="dialog" id="searchDialog" hidden role="dialog" aria-modal="true" aria-label="Search">

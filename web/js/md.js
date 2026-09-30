@@ -8,7 +8,15 @@ export function escapeHtml(s) {
 }
 
 function inline(s) {
-  return s
+  // [text](https://…) external links are lifted out first so later rules (e.g. _italic_) can't
+  // touch the URL — Wikipedia URLs are full of underscores. Runs on escaped text, so the URL
+  // can't break out of the attribute either.
+  const links = [];
+  s = s.replace(/\[([^\]]{1,300})\]\((https?:\/\/[^\s)"<>]{1,2000})\)/g, (_, text, url) => {
+    links.push([text, url]);
+    return `\u0000${links.length - 1}\u0000`;
+  });
+  s = s
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*(?!\s)(.+?)\*(?!\*)/g, "$1<em>$2</em>")
     .replace(/(^|\W)_(?!\s)(.+?)_(?=\W|$)/g, "$1<em>$2</em>")
@@ -16,6 +24,8 @@ function inline(s) {
     // Citations like [Bill, p.4] become links back into the book.
     .replace(/\[([A-Za-z][A-Za-z .]{0,30}), p\.\s?(\d{1,4})\]/g, (_, doc, page) =>
       `<a href="#" class="ref" data-short="${doc.trim()}" data-page="${page}">[${doc.trim()}, p.${page}]</a>`);
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) =>
+    `<a href="${links[i][1]}" target="_blank" rel="noopener noreferrer" class="ext">${links[i][0]}</a>`);
 }
 
 export function renderMD(md) {

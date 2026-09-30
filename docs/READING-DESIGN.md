@@ -64,6 +64,18 @@ The notebook supports that loop without leaving the page.
 | **Research sessions** (one per topic) and **Export brief** | Segmenting a large task into topics (Mayer's segmenting principle), and ending with a tangible output that has references. |
 | Filters, notebook search, **reading order** sort | Review follows the structure of the documents, not the order you happened to click. |
 
+## 2c. "Worth noting": recommendations on every page
+
+Computed on the device from the page text (`web/js/insights.js`), so it works offline and sends
+nothing anywhere.
+
+| Recommendation | How it is chosen | Why |
+|---|---|---|
+| **Key points** (Obligation, Penalty, Timeline, Figure, Right / protection, Power / role) | Sentences matching the language of duties ("shall", "must"), sanctions ("offence", "fine"), time limits ("within 30 days"), amounts and rights, ranked with variety across kinds (max 5). One tap jumps to the sentence; **Keep** saves it as a highlight. | These are what a careful reader of a law underlines. Signalling them reduces search effort and supports learning (Mayer's [signaling principle](https://www.cambridge.org/core/books/cambridge-handbook-of-multimedia-learning/signaling-or-cueing-principle-in-multimedia-learning/3972D4ACC628D5B53F7B2B4785DB2B06)). |
+| **Cross-references** | "section 25", "clause 5" in the Bill and Digest become jump links; references to the page you are on are skipped | Legal text is a web of references. Following them should cost one tap. |
+| **Related in the other documents** | The page's most distinctive terms (tf-idf), searched with BM25 across the *other* documents | Reading **laterally** inside the corpus: the Digest's plain summary next to the Bill's clause, the Roadmap's plan for a Strategy pillar. |
+| **From your notebook** | Your notes that cite this page or share its key terms | Reconnects today's reading with earlier thinking. |
+
 ## 3. Colour: three palettes, three moods
 
 Colour carries meaning and affects affect, cognition and behaviour, but its effects depend on
@@ -101,6 +113,19 @@ strip, so every colour is visible.
 reading *pleasant for you*, which is what keeps people reading.
 
 ---
+
+## 3b. Research best practice, built in
+
+| Practice | Evidence | How BookMind applies it |
+|---|---|---|
+| **Primary source first** | Legal meaning lives in the enacted text; summaries can drift | The checklist says so; Research cites the Bill's pages; the Digest is shown as *related*, not as a replacement. |
+| **Cite as you go** | Traceable claims can be checked later | Every answer cites `[Doc, p.N]`; citations are links; the exported brief has a References section. |
+| **Lateral reading** | Professional fact-checkers reached better judgements in a fraction of the time by leaving an unfamiliar site to see what *others* say about it, instead of reading it top to bottom ([Wineburg & McGrew 2019](https://journals.sagepub.com/doi/10.1177/016146811912101102)) | Web results show *who* published them first (tier + domain); the checklist asks you to open other tabs for unknown sources. |
+| **SIFT** — Stop, Investigate the source, Find better coverage, Trace claims ([Caulfield](https://hapgood.us/2019/06/19/sift-the-four-moves/); [library guide](https://guides.lib.uchicago.edu/c.php?g=1241077&p=9082322)) | A short, teachable routine that works | Built into the notebook's **Research checklist**; web answers are kept in a separate *Beyond the documents* section so you can trace every claim. |
+| **Prefer authoritative sources** | Official and intergovernmental publishers are accountable for what they publish | Ranking: Official (Kenya: `.go.ke`, Kenya Law) → Government / Intergovernmental (OECD, UNESCO, AU, UN…) → Academic → Reference (Wikipedia: "verify with a primary source") → News → Other ("check who publishes it"). |
+| **Record when you accessed a web source** | Web pages change; the Bill is a 2026 draft | Saved web sources and the brief carry the access date. |
+| **Privacy by default** | A reading tool shouldn't leak what you read | Web search is the only feature that sends anything off the device. It asks first, sends only the search words, can be turned off per device or server-wide, and its logs never contain query text. |
+| **Treat web text as untrusted** | Prompt injection via retrieved content | Web snippets are stripped of markup, fenced in the prompt as untrusted, never followed as instructions; links open with `rel="noopener noreferrer"`. The server only calls configured providers, never a user-supplied URL (no SSRF). |
 
 ## 4. Defaults, and how to change them
 

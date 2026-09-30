@@ -546,3 +546,52 @@ input[type="range"] { accent-color: var(--chrome-accent); width: 92px; }
 .page-body .sentence.saved-hl { background: color-mix(in srgb, var(--accent) 24%, transparent); cursor: pointer; }
 .page-body .sentence.saved-note { box-shadow: inset 0 -2px 0 var(--secondary); cursor: pointer; }
 .page-body .sentence.saved.reading { background: var(--hl-reading); }
+
+/* ------------------------------------------------------------------ worth noting */
+.insights { margin-top: 26px; font-family: var(--sans); font-size: 14.5px; line-height: 1.5; }
+.insights details { border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-2); padding: 0 14px; }
+.insights summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none;
+  padding: 12px 0; font-weight: 700; color: var(--heading); font-size: 14.5px;
+}
+.insights summary::-webkit-details-marker { display: none; }
+.insights summary::after { content: "▾"; color: var(--ink-soft); transition: transform .2s ease; }
+.insights details:not([open]) summary::after { transform: rotate(-90deg); }
+.insights summary .count { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--accent-ink); background: var(--accent); border-radius: 10px; padding: 1px 8px; }
+.insights h4 { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); margin: 8px 0 6px; }
+.insights ul { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; }
+.insights li { display: flex; align-items: flex-start; gap: 8px; }
+.insights .kind { flex: none; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 8px; margin-top: 2px; background: var(--surface); border: 1px solid var(--line-strong); color: var(--ink); white-space: nowrap; }
+.insights .kind-penalty .kind { border-color: var(--danger); }
+.insights .kind-obligation .kind, .insights .kind-power .kind { border-color: var(--heading); }
+.insights .kind-deadline .kind, .insights .kind-figure .kind { border-color: var(--accent); }
+.insights .kind-right .kind { border-color: var(--secondary); }
+.linktext { flex: 1; text-align: left; background: none; border: 0; padding: 0; color: var(--ink); font: inherit; line-height: 1.45; cursor: pointer; }
+.linktext:hover { text-decoration: underline; text-decoration-color: var(--line-strong); }
+.linktext strong { color: var(--heading); }
+.insights .keep { flex: none; min-height: 0; padding: 0 2px; }
+.insights ul:has(.chip-btn) { display: flex; flex-wrap: wrap; }
+.chip-btn { border: 1px solid var(--line-strong); background: var(--surface); color: var(--link); border-radius: 14px; padding: 4px 10px; font-size: 13px; font-weight: 600; }
+
+/* ------------------------------------------------------------------ web search & sources */
+.web-search { padding: 0 8px 12px; }
+.web-search > .btn { margin: 4px 8px 0; }
+.web-note { font-size: 12.5px; color: var(--ink-soft); margin: 0 10px 6px; }
+.result.web { padding: 10px; border-radius: var(--radius-sm); }
+.result.web .where a, .note .question a, .websrc a, a.ext { color: var(--link); }
+.result .meta, .note .meta { font-size: 12px; color: var(--ink-soft); margin: 3px 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.web-actions { margin-top: 4px; }
+.tag.tier.good { border-color: var(--secondary); background: color-mix(in srgb, var(--secondary) 16%, transparent); }
+.tag.tier.check { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.note.kind-web { border-left-color: var(--link); }
+.websrc { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line-strong); font-size: 13.5px; }
+.websrc ul { margin: 4px 0 0; padding-left: 18px; }
+.websrc li { margin-bottom: 4px; }
+.switch { display: flex !important; align-items: center; gap: 8px; margin: 10px 0 0 !important; font-size: 13px !important; font-weight: 600 !important; text-transform: none !important; letter-spacing: 0 !important; color: var(--ink) !important; cursor: pointer; }
+.popover .switch { color: var(--chrome-ink) !important; }
+.switch input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.nb-tips { border: 1px solid var(--line); border-radius: var(--radius); padding: 0 12px; background: var(--surface); font-size: 13.5px; line-height: 1.5; }
+.nb-tips summary { cursor: pointer; padding: 10px 0; font-weight: 700; color: var(--heading); }
+.nb-tips ol { margin: 0 0 12px; padding-left: 20px; display: grid; gap: 6px; }
+.page-body .landed { animation: landed 1.8s ease; border-radius: 4px; }
+@keyframes landed { 0%, 35% { background: color-mix(in srgb, var(--accent) 30%, transparent); } 100% { background: transparent; } }

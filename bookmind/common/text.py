@@ -76,7 +76,9 @@ def best_sentences(query: str, text: str, n: int = 2) -> list[str]:
     return [s for *_, s in scored[:n]]
 
 
-def extractive_answer(mode: str, selection: str, related: list[dict], definitions: list[dict], reason: str) -> str:
+def extractive_answer(
+    mode: str, selection: str, related: list[dict], definitions: list[dict], reason: str, web: list[dict] | None = None
+) -> str:
     """A grounded answer built only from the corpus — used when the model is unavailable.
 
     Same shape as the model's output (markdown with ## headings, [Doc, p.N] citations), so the
@@ -102,6 +104,10 @@ def extractive_answer(mode: str, selection: str, related: list[dict], definition
             picks = best_sentences(selection, r.get("text") or r.get("snippet", ""), 2)
             if picks:
                 parts.append(f"- {excerpt(' '.join(picks), 420)} [{r['docShort']}, p.{r['page']}]")
+    if web:
+        parts.append("## Beyond the documents (web)")
+        for w in web[:4]:
+            parts.append(f"- [{w['title']}]({w['url']}) — {excerpt(w.get('snippet', ''), 220)} _({w['domain']} · {w['tier_label']})_")
     if not matched_defs and not related:
         parts.append("No closely related passages or defined terms were found in these documents.")
     parts.append(f"\n_Extractive note — quoted from the documents without a language model ({reason})._")

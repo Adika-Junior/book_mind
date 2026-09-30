@@ -44,6 +44,7 @@ x-env: &env
   BOOKMIND_SEARCH_URL: http://search:8000
   BOOKMIND_RESEARCH_URL: http://research:8000
   BOOKMIND_NOTEBOOK_URL: http://notebook:8000
+  BOOKMIND_WEBSEARCH_URL: http://websearch:8000
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
 
 services:
@@ -130,6 +131,34 @@ services:
     networks: [backend]
     deploy:
       resources: { limits: { memory: 256m } }
+
+  # The only app service with internet access: it talks to search providers, nothing else does.
+  websearch:
+    <<: *service
+    environment:
+      <<: *env
+      SERVICE: websearch
+      BOOKMIND_WEBSEARCH_PROVIDERS: ${BOOKMIND_WEBSEARCH_PROVIDERS:-searxng,wikipedia}
+      BOOKMIND_SEARXNG_URL: http://searxng:8080
+    networks: [backend, egress]
+    deploy:
+      resources: { limits: { memory: 192m } }
+
+  # Private metasearch (no tracking, no API key). Queries leave the server only from here.
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET_FILE: /run/secrets/searxng_secret
+      SEARXNG_BASE_URL: http://searxng:8080/
+      GRANIAN_HOST: 0.0.0.0          # bind IPv4: many Docker hosts have no IPv6 inside containers
+    secrets: [searxng_secret]
+    entrypoint: ["sh", "-c", "export SEARXNG_SECRET=\"$$(cat /run/secrets/searxng_secret)\"; exec /usr/local/searxng/entrypoint.sh"]
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks: [egress]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
 
   redis:
     image: redis:7.4-alpine
@@ -237,3 +266,4 @@ secrets:
   internal_token: { file: ../secrets/internal_token.txt }
   redis_password: { file: ../secrets/redis_password.txt }
   grafana_password: { file: ../secrets/grafana_password.txt }
+  searxng_secret: { file: ../secrets/searxng_secret.txt }

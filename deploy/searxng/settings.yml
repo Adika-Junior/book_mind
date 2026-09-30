@@ -1,0 +1,18 @@
+# Private SearXNG metasearch for BookMind's websearch service (https://docs.searxng.org).
+# Reachable only from the compose network; never published to the host.
+use_default_settings: true
+general:
+  instance_name: "BookMind search"
+server:
+  # Overridden at runtime by the SEARXNG_SECRET environment variable (see docker-compose.yml).
+  secret_key: "set-by-environment"
+  limiter: false          # only BookMind's websearch service can reach it
+  image_proxy: false
+  method: "GET"
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json                # the websearch service reads JSON
+outgoing:
+  request_timeout: 4.0

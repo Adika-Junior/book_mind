@@ -13,9 +13,15 @@ from __future__ import annotations
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from bookmind.common.rpc import register_inproc
-from bookmind.services import catalog, gateway, notebook, research, search
+from bookmind.services import catalog, gateway, notebook, research, search, websearch
 
-SERVICES = {"catalog": catalog.app, "search": search.app, "research": research.app, "notebook": notebook.app}
+SERVICES = {
+    "catalog": catalog.app,
+    "search": search.app,
+    "research": research.app,
+    "notebook": notebook.app,
+    "websearch": websearch.app,
+}
 
 for _name, _app in SERVICES.items():
     register_inproc(_name, _app)

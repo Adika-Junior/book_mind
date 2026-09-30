@@ -3,5 +3,6 @@
   "simplify_enabled": true,
   "llm_enabled": true,
   "notes_search_enabled": true,
+  "web_search_enabled": true,
   "maintenance_message": ""
 }

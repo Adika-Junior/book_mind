@@ -55,6 +55,7 @@ history) are in [`rag-digital-book-architecture.md`](rag-digital-book-architectu
 | search | passage index + notes read model | horizontally (each replica projects independently) | `bookmind/services/search.py` |
 | research | nothing (cache in Redis) | horizontally; model is the bottleneck | `bookmind/services/research.py` |
 | notebook | notes (SQLite), outbox | **one writer** (see §4 for the Postgres path) | `bookmind/services/notebook.py` |
+| websearch | nothing (cache in Redis); the **only** app service with internet egress | horizontally | `bookmind/services/websearch.py` |
 
 The same code runs in three shapes:
 

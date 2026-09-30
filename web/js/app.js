@@ -5,6 +5,7 @@ import { api, HttpError, SyncEngine } from "./net.js";
 import { escapeHtml, renderMD } from "./md.js";
 import { definitions, excerpt, extractiveAnswer, searchNotes, searchPassages, tokenize } from "./search.js";
 import { buildOutline, nextHeading, sectionAt, structure } from "./structure.js";
+import { relatedElsewhere, relatedNotes, worthNoting } from "./insights.js";
 import * as store from "./store.js";
 
 const $ = (id) => document.getElementById(id);
@@ -14,7 +15,7 @@ const state = {
   chunks: [], docs: [], byId: {}, order: [],
   doc: null, idx: 0,
   notes: [],
-  flags: { research_enabled: true, simplify_enabled: true, llm_enabled: true, notes_search_enabled: true },
+  flags: { research_enabled: true, simplify_enabled: true, llm_enabled: true, notes_search_enabled: true, web_search_enabled: true },
   limits: { max_selection_chars: 2000, max_context_chars: 6000 },
   selection: "", selectionSentence: 0,
   returnTo: null,
@@ -284,6 +285,7 @@ function renderPage({ keepSpeech = false } = {}) {
   $("pageTotal").textContent = `of ${d.chunks.length}`;
   renderBlocks($("pageBody"), c, d.id);
   paintSavedHighlights();
+  renderInsights(d, c);
   renderUpNext(d);
   closeTermPop();
 
@@ -397,7 +399,7 @@ function renderOutline() {
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = item.label;
-    b.addEventListener("click", () => { goTo(d.id, item.idx, { jump: true }); if (!mq.nav.matches) closeNav(); });
+    b.addEventListener("click", () => { goToHeading(d.id, item.idx, item.label.slice(0, 60)); if (!mq.nav.matches) closeNav(); });
     li.appendChild(b);
     ul.appendChild(li);
   });
@@ -605,6 +607,182 @@ const onSelection = debounce(() => {
   toolbar.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
 }, 120);
 
+/* =========================================================== worth noting (on-device recommendations) */
+
+function flashSentence(si) {
+  const span = $("pageBody").querySelector(`.sentence[data-si="${si}"]`);
+  if (!span) return;
+  span.scrollIntoView({ block: "center", behavior: "smooth" });
+  span.classList.add("hit");
+  setTimeout(() => span.classList.remove("hit"), 2200);
+}
+
+function clausePage(clause) {
+  const want = `clause ${clause.toLowerCase()}`;
+  const target = outlineOf("bill").find((o) => o.label.toLowerCase() === want || o.label.toLowerCase().startsWith(want + " "));
+  return target ? target.idx : -1;
+}
+
+/** Go to a page and land on a specific heading (a page can hold several clauses). */
+function goToHeading(docId, idx, label) {
+  goTo(docId, idx, { jump: true });
+  const want = label.toLowerCase();
+  const heading = [...$("pageBody").querySelectorAll("[data-label]")].find((h) => h.dataset.label.toLowerCase().startsWith(want));
+  if (heading) {
+    heading.scrollIntoView({ block: "start" });
+    heading.classList.add("landed");
+    setTimeout(() => heading.classList.remove("landed"), 1800);
+  }
+  updateDocProgress();
+}
+
+function jumpToClause(clause) {
+  const idx = clausePage(clause);
+  if (idx >= 0) goToHeading("bill", idx, `clause ${clause}`);
+  else toast(`Couldn't find clause ${clause} in the Bill.`);
+}
+
+function renderInsights(d, c) {
+  const box = $("insights");
+  box.textContent = "";
+  if (!store.prefs.get("insights", true)) { box.hidden = true; return; }
+  const found = worthNoting($("pageBody"), d.id);
+  const points = found.points;
+  // Only references that lead somewhere else: skip clauses printed on this very page.
+  const xrefs = found.xrefs.filter((x) => { const idx = clausePage(x.clause); return idx >= 0 && !(d.id === "bill" && idx === state.idx); });
+  const related = relatedElsewhere(state.chunks, c, 3);
+  const mine = relatedNotes(state.notes, c, state.idx + 1, 3);
+  if (!points.length && !related.length && !xrefs.length && !mine.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const details = document.createElement("details");
+  details.open = store.prefs.get("insightsOpen", true);
+  details.addEventListener("toggle", () => store.prefs.set("insightsOpen", details.open));
+  const summary = document.createElement("summary");
+  summary.innerHTML = `<span>Worth noting on this page</span><span class="count">${points.length + related.length + xrefs.length + mine.length}</span>`;
+  details.appendChild(summary);
+
+  const section = (title, items) => {
+    if (!items.length) return;
+    const h = document.createElement("h4");
+    h.textContent = title;
+    const ul = document.createElement("ul");
+    items.forEach((li) => ul.appendChild(li));
+    details.append(h, ul);
+  };
+  section("Key points", points.map((p) => {
+    const li = document.createElement("li");
+    li.className = `point kind-${p.kind}`;
+    const tag = Object.assign(document.createElement("span"), { className: "kind", textContent: p.label });
+    const go = Object.assign(document.createElement("button"), { type: "button", className: "linktext", textContent: excerpt(p.text, 180) });
+    go.addEventListener("click", () => flashSentence(p.si));
+    const keep = Object.assign(document.createElement("button"), { type: "button", className: "linkbtn keep", textContent: "Keep" });
+    keep.title = "Save as a highlight in your notebook";
+    keep.addEventListener("click", async () => {
+      const note = newNote("highlight", p.text, { color: "accent" });
+      state.notes.unshift(note);
+      await saveNote(note);
+      renderNotes();
+      paintSavedHighlights();
+      keep.textContent = "Kept ✓";
+      keep.disabled = true;
+    });
+    li.append(tag, go, keep);
+    return li;
+  }));
+  section("Cross-references", xrefs.map((x) => {
+    const li = document.createElement("li");
+    const b = Object.assign(document.createElement("button"), { type: "button", className: "chip-btn", textContent: `${x.label} →` });
+    b.addEventListener("click", () => jumpToClause(x.clause));
+    li.appendChild(b);
+    return li;
+  }));
+  section("Related in the other documents", related.map((r) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "linktext";
+    b.innerHTML = `<strong>${escapeHtml(r.docShort)}, p.${r.page}</strong> — ${escapeHtml(r.snippet)}`;
+    b.addEventListener("click", () => goTo(r.doc, r.page - 1, { jump: true }));
+    li.appendChild(b);
+    return li;
+  }));
+  section("From your notebook", mine.map((n) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "linktext";
+    b.innerHTML = `<strong>${escapeHtml((KIND[n.mode] || KIND.research).label)} · ${escapeHtml(n.doc_short)}, p.${n.page}</strong> — ${escapeHtml(excerpt(n.comment || n.selection, 160))}`;
+    b.addEventListener("click", () => openNote(n.id));
+    li.appendChild(b);
+    return li;
+  }));
+  box.appendChild(details);
+}
+
+/* =========================================================== web search (opt-in) */
+
+const webAllowed = () => state.flags.web_search_enabled !== false;
+function ensureWebConsent() {
+  if (!webAllowed()) { toast("Web search is switched off on this server."); return false; }
+  if (!navigator.onLine) { toast("You're offline — web search needs a connection."); return false; }
+  if (store.prefs.get("web_ok", false)) return true;
+  // Best practice: be explicit before anything leaves the device.
+  const ok = confirm(
+    "Search the web?\n\nYour search words will be sent to this server's web search providers " +
+    "(a private SearXNG instance and/or Wikipedia). Your notes and reading history are not sent.\n\n" +
+    "Allow web search on this device? You can turn it off again in the Notebook.",
+  );
+  store.prefs.set("web_ok", ok);
+  return ok;
+}
+
+const webRef = (w) => ({ title: w.title, url: w.url, domain: w.domain, tier_label: w.tier_label, accessed_at: w.accessed_at || Date.now() });
+const tierClass = (label = "") => (/^(Official|Government|Intergovernmental|Academic)/.test(label) ? "good" : "check");
+
+async function saveWebSource(w) {
+  const note = newNote("web", `${w.title} — ${w.snippet || ""}`.slice(0, 1200), { web: [webRef(w)] });
+  state.notes.unshift(note);
+  await saveNote(note);
+  renderNotes();
+  toast(`Saved “${excerpt(w.title, 60)}”${filedIn()}`);
+}
+
+function webResultEl(w) {
+  const el = document.createElement("div");
+  el.className = "result web";
+  el.innerHTML = `<div class="where"><a href="${escapeHtml(w.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(w.title)}</a></div>
+    <div class="meta"><span class="tag tier ${tierClass(w.tier_label)}">${escapeHtml(w.tier_label)}</span> ${escapeHtml(w.domain)}</div>
+    <div class="snippet">${escapeHtml(w.snippet || "")}</div>`;
+  const row = document.createElement("div");
+  row.className = "web-actions";
+  const save = Object.assign(document.createElement("button"), { type: "button", className: "linkbtn", textContent: "Save to notebook" });
+  save.addEventListener("click", () => { saveWebSource(w); save.textContent = "Saved ✓"; save.disabled = true; });
+  row.appendChild(save);
+  el.appendChild(row);
+  return el;
+}
+
+async function searchWeb(q) {
+  const box = $("webResults");
+  if (!ensureWebConsent()) return;
+  box.innerHTML = '<div class="thinking"><span class="spinner"></span> Searching the web…</div>';
+  try {
+    const res = await api(`/api/v1/web?q=${encodeURIComponent(q)}&k=8`, { timeout: 15000 });
+    box.textContent = "";
+    const h = document.createElement("h3");
+    h.textContent = "On the web";
+    box.appendChild(h);
+    const note = document.createElement("p");
+    note.className = "web-note";
+    note.textContent = "Outside the four documents. Official and intergovernmental sources are listed first — check who published anything else before relying on it.";
+    box.appendChild(note);
+    if (!res.results.length) box.insertAdjacentHTML("beforeend", '<div class="empty">No web results. Search providers may be unavailable.</div>');
+    for (const w of res.results) box.appendChild(webResultEl({ ...w, accessed_at: res.retrieved_at }));
+  } catch (err) {
+    box.innerHTML = `<div class="empty">${escapeHtml(err instanceof HttpError && err.status === 429 ? "Too many web searches — wait a minute." : "Web search is unavailable right now. The four documents are still fully searchable.")}</div>`;
+  }
+}
+
 /* =========================================================== research workspace: notes, sessions, ask */
 
 // Every saved item is a "note". Some are answered from the documents (research, simplify, ask);
@@ -616,6 +794,7 @@ const KIND = {
   research: { label: "Research", group: "research" },
   simplify: { label: "Simplified", group: "research" },
   ask: { label: "Question", group: "research" },
+  web: { label: "Web source", group: "research" },
 };
 const nb = { filter: "all", query: "", order: "newest", editing: null };
 const activeSession = () => store.prefs.get("session", "");
@@ -630,6 +809,7 @@ const toServer = (n) => ({
   doc: n.doc, doc_short: n.doc_short, page: n.page, mode: n.mode, selection: n.selection, answer: n.answer || "",
   status: n.status, model: n.model, source: n.source, related: (n.related || []).slice(0, 20), created_at: n.created_at, updated_at: n.updated_at,
   comment: n.comment || "", session: n.session || "", color: n.color || null, chunk_id: n.chunk_id || null,
+  web: (n.web || []).slice(0, 10),
 });
 async function queuePut(note) {
   await store.enqueue({ op: "put", id: note.id, payload: toServer(note) });
@@ -648,7 +828,7 @@ function newNote(mode, selection, extra = {}) {
   return {
     id: `n${now.toString(36)}${rand()}`, doc: d.id, doc_short: d.short, page: state.idx + 1, chunk_id: c.id, mode, selection,
     answer: "", comment: "", session: activeSession(), color: null, status: "done", model: null, source: null, related: [],
-    created_at: now, updated_at: now, synced: false, ...extra,
+    web: [], created_at: now, updated_at: now, synced: false, ...extra,
   };
 }
 
@@ -721,10 +901,11 @@ async function research(mode, text) {
         body: {
           mode, selection, doc: d.id, doc_title: d.title, doc_short: d.short, page: state.idx + 1,
           context_text: c.text.slice(0, state.limits.max_context_chars), chunk_id: c.id, save: true, note_id: note.id, session: note.session,
+          web: store.prefs.get("web_research", false) && webAllowed(),
         },
       });
       Object.assign(note, {
-        answer: res.answer, model: res.model, source: res.source, related: res.related || [], reason: res.reason,
+        answer: res.answer, model: res.model, source: res.source, related: res.related || [], web: res.web || [], reason: res.reason,
         status: "done", updated_at: (res.note && res.note.updated_at) || Date.now(), synced: !!res.saved,
       });
     } catch (err) {
@@ -809,11 +990,20 @@ function noteCard(n) {
   const sessionTag = n.session && !activeSession() ? `<span class="tag session">${escapeHtml(n.session)}</span>` : "";
   let html = `<div class="cite"><a href="#" class="goto">${escapeHtml(n.doc_short)}, p.${n.page}</a> · ${kind.label} ${sessionTag}${kind.group === "research" ? sourceTags(n) : (!n.synced ? '<span class="tag">Not synced</span>' : "")}</div>`;
   if (n.mode === "ask") html += `<p class="question">${escapeHtml(n.selection)}</p>`;
-  else html += `<blockquote>${escapeHtml(excerpt(n.selection, n.mode === "highlight" ? 600 : 260))}</blockquote>`;
-  if (kind.group === "research") {
+  else if (n.mode === "web" && n.web && n.web[0]) {
+    const w = n.web[0];
+    html += `<p class="question"><a href="${escapeHtml(w.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(w.title)}</a></p>` +
+      `<div class="meta"><span class="tag tier ${tierClass(w.tier_label)}">${escapeHtml(w.tier_label)}</span> ${escapeHtml(w.domain)} · accessed ${new Date(w.accessed_at || n.created_at).toLocaleDateString()}</div>` +
+      `<blockquote>${escapeHtml(excerpt(n.selection.replace(/^.*? — /, ""), 400))}</blockquote>`;
+  } else html += `<blockquote>${escapeHtml(excerpt(n.selection, n.mode === "highlight" ? 600 : 260))}</blockquote>`;
+  if (kind.group === "research" && n.mode !== "web") {
     html += n.status === "pending"
       ? '<div class="thinking"><span class="spinner"></span> Reading across the documents…</div>'
       : `<div class="answer">${renderMD(n.answer)}</div>`;
+  }
+  if (n.mode !== "web" && n.web && n.web.length) {
+    html += `<div class="websrc"><span class="comment-label">Beyond the documents — consulted ${new Date(n.web[0].accessed_at || n.created_at).toLocaleDateString()}</span><ul>${n.web.map((w) =>
+      `<li><a href="${escapeHtml(w.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(w.title)}</a> <span class="tag tier ${tierClass(w.tier_label)}">${escapeHtml(w.tier_label)}</span></li>`).join("")}</ul></div>`;
   }
   if (nb.editing === n.id) {
     html += `<div class="comment editing"><label class="comment-label" for="edit-${n.id}">Your note</label>
@@ -833,7 +1023,7 @@ function noteCard(n) {
   card.querySelector(".goto").addEventListener("click", (e) => {
     e.preventDefault();
     goTo(n.doc, n.page - 1, { jump: true });
-    if (n.mode !== "ask") highlightQuery(n.selection);
+    if (n.mode !== "ask" && n.mode !== "web") highlightQuery(n.selection);
     if (!mq.panel.matches) closeNotebook();
   });
   card.querySelector(".remove").addEventListener("click", () => removeNote(n));
@@ -978,13 +1168,30 @@ function exportNotes() {
     md += "## Research notes\n\n";
     for (const n of answers) md += `### ${KIND[n.mode].label} — ${n.doc_short}, p.${n.page}\n\n${quote(n.selection)}\n\n${nested(n.answer)}${yours(n)}\n\n`;
   }
+  const webNotes = notes.filter((n) => n.mode === "web");
+  const webSeen = new Map();
+  for (const n of notes) for (const w of n.web || []) if (!webSeen.has(w.url)) webSeen.set(w.url, w);
+  if (webSeen.size) {
+    md += "## Sources beyond the documents\n\n_Not part of the four documents. Verify before relying on them._\n\n";
+    for (const w of webSeen.values()) md += `- [${w.title}](${w.url}) — ${w.domain} · ${w.tier_label} · accessed ${new Date(w.accessed_at || Date.now()).toISOString().slice(0, 10)}\n`;
+    for (const n of webNotes) if (n.comment) md += `  - **My note on “${n.web[0]?.title || "source"}”:** ${n.comment}\n`;
+    md += "\n";
+  }
   const refs = {};
   for (const n of notes) {
+    if (n.mode === "web") continue;
     (refs[n.doc] ||= new Set()).add(n.page);
     for (const r of n.related || []) { const d = docByShort(r.docShort); if (d) (refs[d.id] ||= new Set()).add(r.page); }
   }
   md += "## References\n\n";
   for (const id of state.order) if (refs[id]) md += `- ${state.byId[id].title} — pp. ${[...refs[id]].sort((a, b) => a - b).join(", ")}\n`;
+  md += "\n## Verification checklist\n\n" + [
+    "Every claim cites a document and page, e.g. [Bill, p.9].",
+    "Claims about the law are checked against the Bill itself, not only the Digest or a summary.",
+    "Web sources are official or intergovernmental where possible; anything else was checked by reading laterally (who publishes it? what do others say?).",
+    "Dates are noted: the Bill is a 2026 draft and may have changed since.",
+    "Extractive or offline answers were re-read in the source before quoting.",
+  ].map((t) => `- [ ] ${t}`).join("\n") + "\n";
   const slug = (session || "notebook").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const url = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
   const a = Object.assign(document.createElement("a"), { href: url, download: `bookmind-${slug}.md` });
@@ -1048,6 +1255,14 @@ const runSearch = debounce(async (q) => {
   });
   if (!passages.length && !notes.length) results.innerHTML = '<div class="empty">Nothing found. Try a different word or a clause number.</div>';
 }, 220);
+
+function updateWebButton(q) {
+  const btn = $("webSearchBtn");
+  const text = (q || "").trim();
+  btn.hidden = text.length < 2 || !webAllowed();
+  btn.lastChild.textContent = ` Search the web for “${excerpt(text, 40)}”`;
+  $("webResults").textContent = "";
+}
 
 function openSearch() {
   $("searchDialog").hidden = false;
@@ -1294,6 +1509,14 @@ function wire() {
     renderNotes();
     toast(`Session “${name}” created — new work is filed there.`);
   });
+  $("webToggle").checked = store.prefs.get("web_research", false);
+  $("webToggle").addEventListener("change", (e) => {
+    if (e.target.checked && !ensureWebConsent()) { e.target.checked = false; return; }
+    store.prefs.set("web_research", e.target.checked);
+    toast(e.target.checked ? "Research and Ask will also consult the web (labelled as outside the documents)." : "Research and Ask will use the four documents only.");
+  });
+  $("insightsToggle").checked = store.prefs.get("insights", true);
+  $("insightsToggle").addEventListener("change", (e) => { store.prefs.set("insights", e.target.checked); renderPage({ keepSpeech: tts.playing }); });
   $("askForm").addEventListener("submit", (e) => {
     e.preventDefault();
     const q = $("askInput").value.replace(/\s+/g, " ").trim();
@@ -1324,7 +1547,8 @@ function wire() {
   $("searchBtn").addEventListener("click", openSearch);
   $("searchClose").addEventListener("click", closeSearch);
   $("searchDialog").addEventListener("click", (e) => { if (e.target === $("searchDialog")) closeSearch(); });
-  $("searchInput").addEventListener("input", (e) => runSearch(e.target.value));
+  $("searchInput").addEventListener("input", (e) => { runSearch(e.target.value); updateWebButton(e.target.value); });
+  $("webSearchBtn").addEventListener("click", () => searchWeb($("searchInput").value.trim()));
 
   // Banners / install
   $("noticeClose").addEventListener("click", () => { store.prefs.set("dismissed_notice", $("noticeText").textContent); $("noticeBanner").hidden = true; });

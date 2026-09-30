@@ -44,6 +44,7 @@
   <symbol id="i-mark" viewBox="0 0 24 24"><path d="m9 15 6-6 3 3-6 6H9z"/><path d="m15 9 2-2 3 3-2 2M4 20h16"/></symbol>
   <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/></symbol>
   <symbol id="i-ask" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4z"/><path d="M10 8.5a2 2 0 1 1 2.7 1.9c-.5.2-.7.6-.7 1.1M12 13.2v.1"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/></symbol>
 </svg>
 
@@ -96,6 +97,7 @@
           <div class="page-meta"><span id="pageNo"></span><span id="timeLeft"></span></div>
         </header>
         <div class="page-body" id="pageBody" aria-live="polite"></div>
+        <section class="insights" id="insights" aria-label="Worth noting on this page" hidden></section>
         <section class="up-next" id="upNext" aria-label="What comes next"></section>
       </article>
       <div class="pager">
@@ -125,7 +127,20 @@
           <label for="askInput"><svg class="icon"><use href="#i-ask"/></svg>Ask the documents</label>
           <div class="nb-row"><textarea id="askInput" rows="2" maxlength="2000" placeholder="e.g. Who appoints the AI Commissioner, and for how long?"></textarea><button type="submit" class="btn small">Ask</button></div>
           <p class="hint">Answered from all four documents, with page citations. Works offline too (quoted, without the model).</p>
+          <label class="switch"><input type="checkbox" id="webToggle"> <svg class="icon"><use href="#i-globe"/></svg> Also consult the web for Research &amp; Ask</label>
         </form>
+        <details class="nb-tips">
+          <summary>Research checklist</summary>
+          <ol>
+            <li><strong>Start with the primary source.</strong> Read the Bill's clause itself; use the Digest and Strategy to understand it, not to replace it.</li>
+            <li><strong>Cite as you go.</strong> Keep the page (e.g. [Bill, p.9]) with every point — answers here do this for you.</li>
+            <li><strong>Write it in your own words.</strong> Add <em>Your note</em> to anything you save; that's where understanding happens.</li>
+            <li><strong>Check sources beyond the documents with SIFT:</strong> Stop · Investigate the source · Find better coverage · Trace claims to the original.</li>
+            <li><strong>Read laterally.</strong> For an unfamiliar website, open other tabs to see who is behind it before reading it closely. Prefer official (.go.ke, Kenya Law) and intergovernmental sources.</li>
+            <li><strong>Mind the date.</strong> The Bill is a 2026 draft — note when you accessed anything and whether it may be out of date.</li>
+            <li><strong>One session per question.</strong> Export the session as a brief and tick its verification checklist before sharing.</li>
+          </ol>
+        </details>
         <div class="seg nb-filters" id="nbFilters" role="group" aria-label="Show">
           <button type="button" data-f="all">All <span class="n"></span></button>
           <button type="button" data-f="highlights">Highlights <span class="n"></span></button>
@@ -203,6 +218,10 @@
       <div class="seg" data-pref="spacing"><button type="button" data-v="normal">Normal</button><button type="button" data-v="wide">Extra (easier for dyslexia)</button></div>
     </fieldset>
     <fieldset>
+      <legend>Reading aids</legend>
+      <label class="switch"><input type="checkbox" id="insightsToggle"> Show “Worth noting” (key points, cross-references, related passages) on each page</label>
+    </fieldset>
+    <fieldset>
       <legend>Focus</legend>
       <div class="seg" data-pref="focus"><button type="button" data-v="off">Whole page</button><button type="button" data-v="on">Dim other paragraphs</button></div>
     </fieldset>
@@ -220,6 +239,10 @@
     </div>
     <div class="search-meta" id="searchMeta">Try “high-risk”, “sandbox”, “Commissioner” or a clause number.</div>
     <div class="results" id="searchResults"></div>
+    <div class="web-search">
+      <button type="button" class="btn ghost small" id="webSearchBtn" hidden><svg class="icon"><use href="#i-globe"/></svg> Search the web</button>
+      <div class="results" id="webResults" aria-live="polite"></div>
+    </div>
   </div>
 </div>
 

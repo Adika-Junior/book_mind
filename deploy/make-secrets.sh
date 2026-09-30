@@ -7,6 +7,7 @@ gen auth_password.txt
 gen internal_token.txt
 gen redis_password.txt
 gen grafana_password.txt
+gen searxng_secret.txt
 chmod 644 ./*.txt  # containers run as non-root UIDs and must read these bind-mounted files
 chmod 700 .   # the directory is the access boundary on the host
 echo "Login user: bookmind   password: $(cat auth_password.txt)"

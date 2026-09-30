@@ -21,6 +21,7 @@ SERVICES = {
         "BOOKMIND_OLLAMA_MODEL": "llama3.2",
         "BOOKMIND_OLLAMA_TIMEOUT_S": "120",
         "BOOKMIND_MAX_CONCURRENT_GENERATIONS": "2"}),
+    "websearch": dict(replicas=2, hpa=None, cpu="50m", mem="192Mi", env={}),
 }
 
 
@@ -217,12 +218,14 @@ otlp = {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.na
 
 dump("networkpolicies", [
     policy("default-deny", None, ingress_from=[], egress_to=[]),
-    policy("gateway", "gateway", [ingress_ctrl, scrape], [dns, otlp, to_pods("catalog", "search", "research", "notebook"), to_pods("redis", port=6379)]),
+    policy("gateway", "gateway", [ingress_ctrl, scrape], [dns, otlp, to_pods("catalog", "search", "research", "notebook", "websearch"), to_pods("redis", port=6379)]),
     policy("catalog", "catalog", [from_pods("gateway", "search", "research"), scrape], [dns, otlp]),
     policy("search", "search", [from_pods("gateway", "research"), scrape], [dns, otlp, to_pods("catalog", "notebook"), to_pods("redis", port=6379)]),
-    policy("research", "research", [from_pods("gateway"), scrape], [dns, otlp, to_pods("search", "catalog"), to_pods("redis", port=6379), to_pods("ollama", port=11434)]),
+    policy("research", "research", [from_pods("gateway"), scrape], [dns, otlp, to_pods("search", "catalog", "websearch"), to_pods("redis", port=6379), to_pods("ollama", port=11434)]),
+    # The only app service allowed out to the internet (search providers over HTTPS / SearXNG).
+    policy("websearch", "websearch", [from_pods("gateway", "research"), scrape], [dns, otlp, to_pods("redis", port=6379), {"ports": [{"port": 443}, {"port": 8080}]}]),
     policy("notebook", "notebook", [from_pods("gateway", "search"), scrape], [dns, otlp, to_pods("redis", port=6379)]),
-    policy("redis", "redis", [from_pods("gateway", "search", "research", "notebook", port=6379)], []),
+    policy("redis", "redis", [from_pods("gateway", "search", "research", "notebook", "websearch", port=6379)], []),
     # Ollama may reach the internet (to pull weights) but only research may reach Ollama.
     policy("ollama", "ollama", [from_pods("research", port=11434)], [dns, {"ports": [{"port": 443}]}]),
 ])

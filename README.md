@@ -18,6 +18,15 @@ from a **local, free, open-weight model**, and keep a notebook that syncs across
   (light and dark, every text pair contrast-checked), plus a choice of reading typeface
   (Literata, Atkinson Hyperlegible, …), size, line spacing, line length and dyslexia-friendly
   spacing. Why each default was chosen: **[docs/READING-DESIGN.md](docs/READING-DESIGN.md)**.
+- 🔎 **Research workspace.** Highlight, write your own notes, *Ask the documents*, organise work
+  into sessions, and export a research brief with references and a verification checklist.
+- 💡 **Worth noting.** Each page lists its key obligations, penalties, deadlines and figures,
+  cross-references you can jump to, related passages in the other documents, and your related
+  notes — computed on the device, offline.
+- 🌐 **Web search, responsibly.** Opt-in per device, via a private SearXNG instance and
+  Wikipedia (no API keys, no tracking). Results are ranked and labelled by source quality
+  (official Kenyan, intergovernmental, academic, reference, news, other), kept separate from the
+  documents in answers, and saved with the date you accessed them.
 - 🧭 **Structure you can follow.** Real headings and clause lists rebuilt from the PDFs, a
   contents sidebar, a live "you are here" breadcrumb, time left, and an "Up next" signpost.
 
@@ -54,7 +63,11 @@ open https://localhost                                     # user: bookmind, pas
 ```
 
 This starts the NGINX edge (TLS, HTTP/2, rate limits, caching), 2× gateway, catalog,
-2× search, research, notebook, Redis and Ollama, on segmented internal networks.
+2× search, research, notebook, websearch + a private SearXNG, Redis and Ollama, on segmented
+internal networks. Only `websearch`/`searxng` (and Ollama, for model downloads) can reach the
+internet. Turn web search off for everyone with `"web_search_enabled": false` in
+`deploy/config/flags.json`; in single-process mode it uses Wikipedia unless you set
+`BOOKMIND_SEARXNG_URL`.
 
 Optional profiles:
 
@@ -97,6 +110,8 @@ Offline mode needs HTTPS (browsers only allow service workers on HTTPS or `local
 | Turn pages | ← → buttons, arrow keys, swipe, type a page number, or jump from **Contents** in the sidebar |
 | Change the look | **Aa**: palette, brightness, typeface, size, line spacing, line length, letter spacing, focus |
 | Look up a term | Tap a dotted-underlined term for the Bill's own definition |
+| Worth noting | Below each page: key points (tap to jump, **Keep** to save), cross-references, related passages elsewhere, your related notes. Toggle in **Aa → Reading aids**. |
+| Web search | In search (`/`), **Search the web for "…"**. Or tick **Also consult the web** in the Notebook so Research and Ask include web sources (in a separate, labelled section). Asks once per device before anything is sent. |
 | Listen | ▶ (Space). Choose voice / speed / text size in the bar (⚙ on phones). Tap a sentence to jump there. Lock-screen controls work. |
 | Highlight / note | Select text → **Highlight** to keep it, or **Note** to write your own thoughts about it. Your highlights show on the page; tap one to open it. |
 | Research / Simplify | Select text → **Research** (cited explanation) or **Simplify** (plain-English definition), or **Read from here** |

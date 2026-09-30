@@ -139,6 +139,7 @@ DEFAULT_FLAGS: dict[str, object] = {
     "simplify_enabled": True,  # "Simplify / define" in the reader
     "llm_enabled": True,  # kill switch: false => extractive answers only, never call the model
     "notes_search_enabled": True,  # include your notebook in search results
+    "web_search_enabled": True,  # allow opt-in web search (each device still has to opt in)
     "maintenance_message": "",  # shown as a banner in every client when non-empty
 }
 

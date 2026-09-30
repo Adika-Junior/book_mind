@@ -46,7 +46,8 @@ search = ServiceClient("search", timeout_s=5)
 # Generation can legitimately take a while on a CPU-only laptop.
 research = ServiceClient("research", timeout_s=settings.ollama_timeout_s + 10, failure_threshold=3)
 notebook = ServiceClient("notebook", timeout_s=5)
-CLIENTS = {"catalog": catalog, "search": search, "research": research, "notebook": notebook}
+websearch = ServiceClient("websearch", timeout_s=12)
+CLIENTS = {"catalog": catalog, "search": search, "research": research, "notebook": notebook, "websearch": websearch}
 
 book_cache = Cache("book", ttl_s=300, stale_ttl_s=30 * 86400)
 definitions_cache = Cache("definitions", ttl_s=3600, stale_ttl_s=30 * 86400)
@@ -106,6 +107,8 @@ async def rate_limit_middleware(request: Request, call_next):
     buckets = [("api", settings.rate_api_per_s, settings.rate_api_burst)]
     if path == "/api/v1/research" and request.method == "POST":
         buckets.append(("research", settings.rate_research_per_min / 60, settings.rate_research_burst))
+    if path == "/api/v1/web":
+        buckets.append(("web", 20 / 60, 10))  # be a polite client of upstream search providers
     kv = get_kv()
     for scope, rate, burst in buckets:
         try:
@@ -246,10 +249,11 @@ class ResearchRequest(BaseModel):
     save: bool = False
     note_id: str | None = Field(None, pattern=NOTE_ID)
     session: str = Field("", max_length=80)
+    web: bool = False
 
 
 def _generate_payload(req: ResearchRequest) -> dict:
-    return req.model_dump(include={"mode", "selection", "doc_title", "doc_short", "page", "context_text", "chunk_id"})
+    return req.model_dump(include={"mode", "selection", "doc_title", "doc_short", "page", "context_text", "chunk_id", "web"})
 
 
 def _note_payload(req: ResearchRequest, **extra) -> dict:
@@ -292,6 +296,7 @@ def research_and_save_saga(req: ResearchRequest) -> Saga:
                 model=g.get("model"),
                 source=g.get("source"),
                 related=g.get("related", []),
+                web=g.get("web", []),
                 updated_at=max(int(time.time() * 1000), ctx["reserved_at"] + 1),
             ),
         )
@@ -363,6 +368,19 @@ async def delete_note(request: Request, note_id: str = Path(..., pattern=NOTE_ID
     return await idempotent(request, "notes", handler)
 
 
+# ----------------------------------------------------------------------------- web search
+
+
+@app.get("/api/v1/web")
+async def web_search(q: str = Query(..., min_length=2, max_length=300), k: int = Query(8, ge=1, le=20)):
+    if not await flags.enabled("web_search_enabled"):
+        raise HTTPException(403, "Web search is switched off on this server.")
+    try:
+        return await websearch.get("/v1/search", params={"q": q, "k": k}, retries=1)
+    except (UpstreamError, CircuitOpenError):
+        return degraded("Web search is unavailable right now. The four documents are still fully searchable.")
+
+
 # ----------------------------------------------------------------------------- config & status
 
 
@@ -371,7 +389,7 @@ async def client_config():
     current = await flags.all()
     return {
         "version": __version__,
-        "flags": {k: current[k] for k in ("research_enabled", "simplify_enabled", "llm_enabled", "notes_search_enabled")},
+        "flags": {k: current[k] for k in ("research_enabled", "simplify_enabled", "llm_enabled", "notes_search_enabled", "web_search_enabled")},
         "maintenance_message": current.get("maintenance_message") or "",
         "limits": {"max_selection_chars": settings.max_selection_chars, "max_context_chars": settings.max_context_chars},
     }

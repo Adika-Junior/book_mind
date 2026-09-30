@@ -13,7 +13,7 @@ alerting:
 scrape_configs:
   - job_name: bookmind
     dns_sd_configs:
-      - names: [gateway, catalog, search, research, notebook]
+      - names: [gateway, catalog, search, research, notebook, websearch]
         type: A
         port: 8000
     relabel_configs:

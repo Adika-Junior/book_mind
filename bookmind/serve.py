@@ -8,7 +8,7 @@ import os
 
 import uvicorn
 
-SERVICES = {"gateway", "catalog", "search", "research", "notebook"}
+SERVICES = {"gateway", "catalog", "search", "research", "notebook", "websearch"}
 
 
 def main() -> None:

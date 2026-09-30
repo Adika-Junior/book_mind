@@ -69,13 +69,14 @@ V2_COLUMNS = {
     "session": "TEXT DEFAULT ''",
     "color": "TEXT",
     "chunk_id": "TEXT",
+    "web": "TEXT DEFAULT '[]'",  # web sources consulted, with the date they were accessed
 }
 FIELDS = [
     "id", "doc", "doc_short", "page", "mode", "selection", "answer", "status", "model", "source", "related",
-    "created_at", "updated_at", "comment", "session", "color", "chunk_id",
+    "created_at", "updated_at", "comment", "session", "color", "chunk_id", "web",
 ]
 # research / simplify / ask are answered from the documents; highlight and note are the reader's own.
-NoteMode = Literal["research", "simplify", "ask", "highlight", "note"]
+NoteMode = Literal["research", "simplify", "ask", "highlight", "note", "web"]
 
 
 @contextmanager
@@ -108,10 +109,11 @@ def migrate() -> None:
 
 def row_to_note(row: sqlite3.Row) -> dict:
     note = {k: row[k] for k in FIELDS}
-    try:
-        note["related"] = json.loads(note["related"] or "[]")
-    except ValueError:
-        note["related"] = []
+    for field in ("related", "web"):
+        try:
+            note[field] = json.loads(note[field] or "[]")
+        except ValueError:
+            note[field] = []
     return note
 
 
@@ -126,6 +128,14 @@ class RelatedRef(BaseModel):
     id: str | None = Field(None, max_length=64)
     docShort: str = Field(..., max_length=40)
     page: int
+
+
+class WebRef(BaseModel):
+    title: str = Field(..., max_length=300)
+    url: str = Field(..., max_length=2000, pattern=r"^https?://")
+    domain: str = Field("", max_length=200)
+    tier_label: str = Field("", max_length=80)
+    accessed_at: int | None = None
 
 
 class NoteIn(BaseModel):
@@ -145,6 +155,7 @@ class NoteIn(BaseModel):
     session: str = Field("", max_length=80)
     color: str | None = Field(None, pattern=r"^[a-z]{1,12}$")
     chunk_id: str | None = Field(None, max_length=64)
+    web: list[WebRef] = Field(default_factory=list, max_length=10)
 
 
 def upsert_note(note_id: str, note: NoteIn) -> dict:
@@ -180,6 +191,7 @@ def upsert_note(note_id: str, note: NoteIn) -> dict:
             "session": note.session.strip(),
             "color": note.color,
             "chunk_id": note.chunk_id,
+            "web": json.dumps([w.model_dump() for w in note.web]),
         }
         conn.execute(
             f"INSERT OR REPLACE INTO notes({','.join(FIELDS)}, ts) VALUES ({','.join('?' * len(FIELDS))}, ?)",  # noqa: S608
@@ -187,7 +199,7 @@ def upsert_note(note_id: str, note: NoteIn) -> dict:
         )
         if tomb:
             conn.execute("DELETE FROM tombstones WHERE id=?", (note_id,))
-        payload = {**record, "related": json.loads(record["related"])}
+        payload = {**record, "related": json.loads(record["related"]), "web": json.loads(record["web"])}
         _enqueue(conn, "note.upserted", payload)
         conn.commit()  # note + event commit atomically
     NOTES_WRITES.labels("upsert", "applied").inc()

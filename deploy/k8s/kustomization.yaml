@@ -1,0 +1,15 @@
+# kubectl apply -k deploy/k8s     (create the bookmind-secrets Secret first — secrets.example.yaml)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bookmind
+resources:
+  - namespace.yaml
+  - config.yaml
+  - services.yaml
+  - infrastructure.yaml
+  - networkpolicies.yaml
+  - ingress.yaml
+images:
+  - name: ghcr.io/OWNER/bookmind
+    newName: ghcr.io/adika-junior/bookmind
+    newTag: "2.0.0"

@@ -1,0 +1,13 @@
+.git
+.github
+**/__pycache__
+**/*.pyc
+.venv
+venv
+.env
+secrets/
+data/*.db*
+tests/
+docs/
+deploy/k8s
+*.md

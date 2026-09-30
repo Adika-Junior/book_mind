@@ -1,0 +1,21 @@
+# Canary release (not applied by default). Deploy the new version as `gateway-canary`
+# (same labels + app.kubernetes.io/version: canary, and its own Service), then send it a slice
+# of traffic. Watch the Grafana error-ratio panel; raise the weight or delete to roll back.
+# With Linkerd/Istio or Argo Rollouts the same split can be automated on SLO metrics.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bookmind-canary
+  namespace: bookmind
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "10"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: bookmind.example.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: gateway-canary, port: { number: 8000 } } }

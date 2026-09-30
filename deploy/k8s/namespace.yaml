@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bookmind
+  labels:
+    # Enforce the "restricted" Pod Security Standard for every pod in the namespace.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    # Service mesh: Linkerd injects a sidecar into every pod, giving automatic mTLS between
+    # services, per-route golden metrics, retries/timeouts and traffic splitting — with no code
+    # changes. (Istio equivalent: label  istio-injection: enabled.)
+    linkerd.io/inject: enabled

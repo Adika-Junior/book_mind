@@ -1,0 +1,253 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BookMind</title>
+<meta name="description" content="An offline-first reader for Kenya's AI policy documents with read-aloud, cited research notes and a notebook.">
+<meta name="theme-color" content="#1e0f0a">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BookMind">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="preload" href="/fonts/literata-var.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/css/themes.css">
+<link rel="stylesheet" href="/css/app.css">
+<!-- Applies the saved palette/theme/font before first paint (no flash of the wrong colours). -->
+<script src="/js/prefs-boot.js"></script>
+<script type="module" src="/js/app.js"></script>
+</head>
+<body>
+
+<svg width="0" height="0" class="sr-only" aria-hidden="true" focusable="false">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7.5h8M8 11h6"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path class="fill" d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5v14M15.5 5v14" stroke-width="3"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></symbol>
+  <symbol id="i-speak" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-type" viewBox="0 0 24 24"><path d="M3 19 8.5 5h1L15 19M5.2 14h7.6M15.5 19l3-8 3 8M16.4 16.5h4.2"/></symbol>
+  <symbol id="i-mark" viewBox="0 0 24 24"><path d="m9 15 6-6 3 3-6 6H9z"/><path d="m15 9 2-2 3 3-2 2M4 20h16"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/></symbol>
+  <symbol id="i-ask" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4z"/><path d="M10 8.5a2 2 0 1 1 2.7 1.9c-.5.2-.7.6-.7 1.1M12 13.2v.1"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/></symbol>
+</svg>
+
+<header class="topbar">
+  <button class="iconbtn" id="navToggle" aria-label="Documents" aria-expanded="false" aria-controls="nav"><svg class="icon"><use href="#i-menu"/></svg></button>
+  <div class="brand">
+    <img class="brand-mark" src="/icons/icon.svg" alt="" width="30" height="30">
+    <div class="brand-text">
+      <h1>BookMind</h1>
+      <div class="sub" id="brandSub">Kenya AI policy reader</div>
+    </div>
+  </div>
+  <span class="chip" id="netChip" hidden><span class="dot"></span><span id="netText"></span></span>
+  <button class="iconbtn" id="searchBtn" aria-label="Search the documents and your notes (/)"><svg class="icon"><use href="#i-search"/></svg></button>
+  <button class="iconbtn" id="settingsBtn" aria-label="Reading settings: colours, typeface, size and spacing" aria-expanded="false" aria-controls="settingsPanel"><svg class="icon"><use href="#i-type"/></svg></button>
+  <button class="iconbtn" id="themeBtn" aria-label="Switch light or dark theme"><svg class="icon"><use id="themeIcon" href="#i-moon"/></svg></button>
+  <button class="iconbtn labelled" id="notebookBtn" aria-label="Notebook: your highlights, notes and research" aria-expanded="false" aria-controls="notebook"><svg class="icon"><use href="#i-book"/></svg><span class="btn-label">Notebook</span><span class="badge" id="noteCount" hidden></span></button>
+</header>
+
+<div class="reading-progress" role="progressbar" aria-label="Progress through this document" aria-valuemin="0" aria-valuemax="100" id="docProgress"><span id="docProgressFill"></span></div>
+<div class="banner" id="updateBanner" hidden role="status"><p>A new version of BookMind is ready.</p><button id="updateBtn" type="button">Reload</button></div>
+<div class="banner info" id="noticeBanner" hidden role="status"><p id="noticeText"></p><button id="noticeClose" type="button" aria-label="Dismiss">OK</button></div>
+
+<div class="shell">
+  <nav class="nav" id="nav" aria-label="Documents">
+    <div id="resumeCard"></div>
+    <h2 id="outlineTitle">Contents</h2>
+    <ul class="outline" id="outline" aria-labelledby="outlineTitle"></ul>
+    <h2>Documents</h2>
+    <div id="docList"></div>
+    <h2>This device</h2>
+    <div class="nav-actions">
+      <button class="btn ghost small" id="installBtn" type="button" hidden><svg class="icon"><use href="#i-download"/></svg>Install app</button>
+    </div>
+    <h2>Services</h2>
+    <ul class="service-list" id="serviceList"><li><span>Checking…</span></li></ul>
+    <div class="nav-foot">
+      Works offline after the first visit. Notes are saved on this device and sync when you're back online.
+      <br>AGPL-3.0 · <a href="https://www.gnu.org/licenses/agpl-3.0.html" class="linkbtn" rel="noopener">license</a>
+    </div>
+  </nav>
+  <div class="scrim nav-scrim" id="navScrim"></div>
+
+  <main class="reader" id="reader">
+    <div class="reader-scroll" id="readerScroll">
+      <div class="column">
+      <article class="page" id="page">
+        <header class="page-kicker">
+          <nav aria-label="You are here"><ol class="crumbs" id="crumbs"><li>Loading…</li></ol></nav>
+          <div class="page-meta"><span id="pageNo"></span><span id="timeLeft"></span></div>
+        </header>
+        <div class="page-body" id="pageBody" aria-live="polite"></div>
+        <section class="insights" id="insights" aria-label="Worth noting on this page" hidden></section>
+        <section class="up-next" id="upNext" aria-label="What comes next"></section>
+      </article>
+      <div class="pager">
+        <button class="btn ghost" id="prevBtn" type="button" aria-label="Previous page"><svg class="icon"><use href="#i-left"/></svg><span class="label">Previous</span></button>
+        <label class="pos"><span>Page</span><input id="pageInput" type="number" inputmode="numeric" min="1" aria-label="Go to page"><span id="pageTotal"></span></label>
+        <button class="btn ghost" id="nextBtn" type="button" aria-label="Next page"><span class="label">Next</span><svg class="icon"><use href="#i-right"/></svg></button>
+      </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="scrim panel-scrim" id="panelScrim"></div>
+  <aside class="panel" id="notebook" aria-label="Notebook">
+    <div class="panel-head">
+      <h2>Notebook</h2>
+      <button class="iconbtn" id="notebookClose" aria-label="Close notebook"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="panel-body">
+      <div class="nb-tools">
+        <div class="nb-session">
+          <label for="sessionSelect">Research session</label>
+          <div class="nb-row"><select id="sessionSelect"></select><button type="button" class="btn ghost small" id="newSessionBtn">New session</button></div>
+          <form id="newSessionForm" class="nb-row" hidden><input id="newSessionName" maxlength="80" placeholder="e.g. Penalties &amp; enforcement" aria-label="New session name" autocomplete="off"><button type="submit" class="btn small">Create</button></form>
+          <p class="hint" id="sessionHint"></p>
+        </div>
+        <form id="askForm" class="nb-ask">
+          <label for="askInput"><svg class="icon"><use href="#i-ask"/></svg>Ask the documents</label>
+          <div class="nb-row"><textarea id="askInput" rows="2" maxlength="2000" placeholder="e.g. Who appoints the AI Commissioner, and for how long?"></textarea><button type="submit" class="btn small">Ask</button></div>
+          <p class="hint">Answered from all four documents, with page citations. Works offline too (quoted, without the model).</p>
+          <label class="switch"><input type="checkbox" id="webToggle"> <svg class="icon"><use href="#i-globe"/></svg> Also consult the web for Research &amp; Ask</label>
+        </form>
+        <details class="nb-tips">
+          <summary>Research checklist</summary>
+          <ol>
+            <li><strong>Start with the primary source.</strong> Read the Bill's clause itself; use the Digest and Strategy to understand it, not to replace it.</li>
+            <li><strong>Cite as you go.</strong> Keep the page (e.g. [Bill, p.9]) with every point — answers here do this for you.</li>
+            <li><strong>Write it in your own words.</strong> Add <em>Your note</em> to anything you save; that's where understanding happens.</li>
+            <li><strong>Check sources beyond the documents with SIFT:</strong> Stop · Investigate the source · Find better coverage · Trace claims to the original.</li>
+            <li><strong>Read laterally.</strong> For an unfamiliar website, open other tabs to see who is behind it before reading it closely. Prefer official (.go.ke, Kenya Law) and intergovernmental sources.</li>
+            <li><strong>Mind the date.</strong> The Bill is a 2026 draft — note when you accessed anything and whether it may be out of date.</li>
+            <li><strong>One session per question.</strong> Export the session as a brief and tick its verification checklist before sharing.</li>
+          </ol>
+        </details>
+        <div class="seg nb-filters" id="nbFilters" role="group" aria-label="Show">
+          <button type="button" data-f="all">All <span class="n"></span></button>
+          <button type="button" data-f="highlights">Highlights <span class="n"></span></button>
+          <button type="button" data-f="mine">My notes <span class="n"></span></button>
+          <button type="button" data-f="research">Research <span class="n"></span></button>
+        </div>
+        <div class="nb-row"><input id="nbQuery" type="search" placeholder="Search your notebook" aria-label="Search your notebook" autocomplete="off"><button type="button" class="linkbtn" id="nbOrder">Newest first</button></div>
+      </div>
+      <div id="notesList"></div>
+    </div>
+    <div class="panel-foot">
+      <button class="btn ghost small" id="syncBtn" type="button"><svg class="icon"><use href="#i-cloud"/></svg>Sync now</button>
+      <button class="btn small" id="exportBtn" type="button" disabled><svg class="icon"><use href="#i-download"/></svg>Export brief</button>
+    </div>
+  </aside>
+</div>
+
+<div class="seltoolbar" id="selToolbar" role="toolbar" aria-label="Selection actions">
+  <button type="button" id="btnHighlight"><svg class="icon"><use href="#i-mark"/></svg>Highlight</button>
+  <button type="button" id="btnNote"><svg class="icon"><use href="#i-pen"/></svg>Note</button>
+  <button type="button" id="btnResearch"><svg class="icon"><use href="#i-spark"/></svg>Research</button>
+  <button type="button" id="btnSimplify"><svg class="icon"><use href="#i-bulb"/></svg>Simplify</button>
+  <button type="button" id="btnReadHere"><svg class="icon"><use href="#i-speak"/></svg>Read from here</button>
+</div>
+
+<footer class="audiobar" aria-label="Read aloud">
+  <button class="playbtn" id="playBtn" type="button" aria-label="Read this page aloud"><svg class="icon"><use id="playIcon" href="#i-play"/></svg></button>
+  <span class="audio-status" id="audioStatus" role="status">Press play to hear this page.</span>
+  <div class="audio-controls">
+    <select id="voiceSelect" aria-label="Voice"></select>
+    <label class="rate">Speed <input type="range" id="rateRange" min="0.6" max="1.8" step="0.1" value="1" aria-label="Reading speed"></label>
+  </div>
+  <button class="iconbtn" id="audioMore" type="button" aria-label="Voice, speed and text size" aria-expanded="false" aria-controls="audioPopover"><svg class="icon"><use href="#i-sliders"/></svg></button>
+</footer>
+
+<div class="popover" id="audioPopover" hidden>
+  <label>Voice <select id="voiceSelectM"></select></label>
+  <label>Reading speed <input type="range" id="rateRangeM" min="0.6" max="1.8" step="0.1" value="1"></label>
+</div>
+
+<div class="popover top" id="settingsPanel" hidden role="dialog" aria-label="Reading settings">
+  <div class="settings">
+    <fieldset>
+      <legend>Colour palette</legend>
+      <div class="seg" id="paletteOpts">
+        <button type="button" class="palette-opt" data-v="golden"><span class="swatch" data-palette="golden"></span>Golden Hour<small>Warm and focused, for long immersive reading.</small></button>
+        <button type="button" class="palette-opt" data-v="coastal"><span class="swatch" data-palette="coastal"></span>Coastal Linen<small>Cool and calm, for careful, analytical reading.</small></button>
+        <button type="button" class="palette-opt" data-v="terracotta"><span class="swatch" data-palette="terracotta"></span>Terracotta Garden<small>Earthy and grounded, for study and review.</small></button>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Brightness</legend>
+      <div class="seg" data-pref="theme"><button type="button" data-v="auto">Auto</button><button type="button" data-v="light">Light</button><button type="button" data-v="dark">Dark</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Typeface</legend>
+      <div class="seg" data-pref="font">
+        <button type="button" class="font-opt" data-v="literata">Literata</button>
+        <button type="button" class="font-opt" data-v="hyperlegible">Hyperlegible</button>
+        <button type="button" class="font-opt" data-v="system-serif">Classic serif</button>
+        <button type="button" class="font-opt" data-v="system-sans">Plain sans</button>
+      </div>
+    </fieldset>
+    <label>Text size <span id="sizeOut"></span><input type="range" id="sizeRange" min="15" max="28" step="1" aria-describedby="sizeOut"></label>
+    <fieldset>
+      <legend>Line spacing</legend>
+      <div class="seg" data-pref="leading"><button type="button" data-v="1.5">Snug</button><button type="button" data-v="1.65">Comfortable</button><button type="button" data-v="1.85">Airy</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Line length</legend>
+      <div class="seg" data-pref="measure"><button type="button" data-v="55">Narrow</button><button type="button" data-v="66">Medium</button><button type="button" data-v="75">Wide</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Letter spacing</legend>
+      <div class="seg" data-pref="spacing"><button type="button" data-v="normal">Normal</button><button type="button" data-v="wide">Extra (easier for dyslexia)</button></div>
+    </fieldset>
+    <fieldset>
+      <legend>Reading aids</legend>
+      <label class="switch"><input type="checkbox" id="insightsToggle"> Show “Worth noting” (key points, cross-references, related passages) on each page</label>
+    </fieldset>
+    <fieldset>
+      <legend>Focus</legend>
+      <div class="seg" data-pref="focus"><button type="button" data-v="off">Whole page</button><button type="button" data-v="on">Dim other paragraphs</button></div>
+    </fieldset>
+    <p class="sample" id="typeSample">The Office shall promote the ethical, safe and inclusive use of artificial intelligence in Kenya — Il1 O0 rn/m.</p>
+    <button type="button" class="btn small" id="resetReading">Reset to recommended</button>
+  </div>
+</div>
+
+<div class="dialog" id="searchDialog" hidden role="dialog" aria-modal="true" aria-label="Search">
+  <div class="dialog-card">
+    <div class="search-row">
+      <svg class="icon"><use href="#i-search"/></svg>
+      <input id="searchInput" type="search" placeholder="Search all four documents and your notes" autocomplete="off" enterkeyhint="search" aria-label="Search">
+      <button class="iconbtn" id="searchClose" aria-label="Close search"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <div class="search-meta" id="searchMeta">Try “high-risk”, “sandbox”, “Commissioner” or a clause number.</div>
+    <div class="results" id="searchResults"></div>
+    <div class="web-search">
+      <button type="button" class="btn ghost small" id="webSearchBtn" hidden><svg class="icon"><use href="#i-globe"/></svg> Search the web</button>
+      <div class="results" id="webResults" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="boot" id="boot" hidden><div class="card"><h2>Couldn’t open the book</h2><p id="bootMsg"></p><button class="btn" id="bootRetry" type="button">Try again</button></div></div>
+
+</body>
+</html>

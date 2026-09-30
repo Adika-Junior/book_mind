@@ -1,0 +1,21 @@
+# Scrapes every BookMind replica. DNS service discovery returns one A record per replica, so
+# scaling a service up needs no config change (Kubernetes: use the ServiceMonitor instead).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files: [/etc/prometheus/alerts.yml]
+
+alerting:
+  alertmanagers:
+    - static_configs: [{ targets: ["alertmanager:9093"] }]
+
+scrape_configs:
+  - job_name: bookmind
+    dns_sd_configs:
+      - names: [gateway, catalog, search, research, notebook, websearch]
+        type: A
+        port: 8000
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service

@@ -1,0 +1,269 @@
+# BookMind — distributed deployment on one machine (or a small VPS).
+#
+#   ./deploy/make-secrets.sh                       # once: random secrets + self-signed TLS cert
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml exec ollama ollama pull llama3.2   # once
+#   open https://localhost
+#
+# Add the observability stack (Prometheus, Alertmanager, Grafana, Loki, Promtail, Jaeger):
+#   docker compose -f deploy/docker-compose.yml --profile observability up -d
+# Add a full OWASP-CRS web application firewall in front of the edge:
+#   docker compose -f deploy/docker-compose.yml --profile waf up -d     (then use https://localhost:9443)
+#
+# Network segmentation (least privilege):
+#   edge     — the edge proxy and the gateway. The ONLY network with published app ports.
+#   backend  — gateway + services + Redis. internal: no route to the internet.
+#   models   — research + Ollama only. internal.
+#   egress   — Ollama only, so it can download model weights.
+
+name: bookmind
+
+x-service: &service
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  image: bookmind:${BOOKMIND_VERSION:-2.0.0}
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  secrets: [internal_token, redis_password]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }   # rotate — never fill the disk
+
+x-env: &env
+  BOOKMIND_ENV: production
+  BOOKMIND_LOG_LEVEL: INFO
+  BOOKMIND_REDIS_URL: redis://redis:6379/0
+  BOOKMIND_REDIS_PASSWORD_FILE: /run/secrets/redis_password
+  BOOKMIND_INTERNAL_TOKEN_FILE: /run/secrets/internal_token
+  # Service discovery by DNS name; Docker's resolver spreads calls across replicas.
+  BOOKMIND_CATALOG_URL: http://catalog:8000
+  BOOKMIND_SEARCH_URL: http://search:8000
+  BOOKMIND_RESEARCH_URL: http://research:8000
+  BOOKMIND_NOTEBOOK_URL: http://notebook:8000
+  BOOKMIND_WEBSEARCH_URL: http://websearch:8000
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
+services:
+  edge:
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      gateway: { condition: service_healthy }
+    ports: ["80:8080", "443:8443"]
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../secrets/tls.crt:/etc/nginx/certs/tls.crt:ro
+      - ../secrets/tls.key:/etc/nginx/certs/tls.key:ro
+    tmpfs: ["/var/cache/nginx:uid=101,gid=101", "/tmp:uid=101,gid=101"]   # nginx runs as uid 101
+    read_only: true
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+
+  gateway:
+    <<: *service
+    environment:
+      <<: *env
+      SERVICE: gateway
+      BOOKMIND_TRUST_PROXY: "true"
+      BOOKMIND_AUTH_USER: ${BOOKMIND_AUTH_USER:-bookmind}
+      BOOKMIND_AUTH_PASSWORD_FILE: /run/secrets/auth_password
+      BOOKMIND_ALLOWED_ORIGINS: ${BOOKMIND_ALLOWED_ORIGINS:-}
+    secrets: [internal_token, redis_password, auth_password]
+    volumes:
+      - ./config/flags.json:/app/deploy/config/flags.json:ro   # edit to flip flags live
+    depends_on:
+      redis: { condition: service_healthy }
+      catalog: { condition: service_healthy }
+    networks: [edge, backend]
+    deploy:
+      replicas: 2
+      resources: { limits: { memory: 256m } }
+
+  catalog:
+    <<: *service
+    environment: { <<: *env, SERVICE: catalog }
+    networks: [backend]
+    deploy:
+      resources: { limits: { memory: 256m } }
+
+  search:
+    <<: *service
+    environment: { <<: *env, SERVICE: search }
+    depends_on:
+      catalog: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [backend]
+    deploy:
+      replicas: 2
+      resources: { limits: { memory: 384m } }
+
+  research:
+    <<: *service
+    environment:
+      <<: *env
+      SERVICE: research
+      BOOKMIND_OLLAMA_URL: http://ollama:11434/api/chat
+      BOOKMIND_OLLAMA_MODEL: ${BOOKMIND_OLLAMA_MODEL:-llama3.2}
+      BOOKMIND_OLLAMA_TIMEOUT_S: ${BOOKMIND_OLLAMA_TIMEOUT_S:-120}
+      BOOKMIND_MAX_CONCURRENT_GENERATIONS: ${BOOKMIND_MAX_CONCURRENT_GENERATIONS:-2}
+    volumes:
+      - ./config/flags.json:/app/deploy/config/flags.json:ro
+    depends_on:
+      search: { condition: service_healthy }
+    networks: [backend, models]
+    deploy:
+      resources: { limits: { memory: 256m } }
+
+  notebook:
+    <<: *service
+    environment: { <<: *env, SERVICE: notebook }
+    volumes:
+      - notebook_data:/app/var          # SQLite: exactly one writer, so exactly one replica
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [backend]
+    deploy:
+      resources: { limits: { memory: 256m } }
+
+  # The only app service with internet access: it talks to search providers, nothing else does.
+  websearch:
+    <<: *service
+    environment:
+      <<: *env
+      SERVICE: websearch
+      BOOKMIND_WEBSEARCH_PROVIDERS: ${BOOKMIND_WEBSEARCH_PROVIDERS:-searxng,wikipedia}
+      BOOKMIND_SEARXNG_URL: http://searxng:8080
+    networks: [backend, egress]
+    deploy:
+      resources: { limits: { memory: 192m } }
+
+  # Private metasearch (no tracking, no API key). Queries leave the server only from here.
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET_FILE: /run/secrets/searxng_secret
+      SEARXNG_BASE_URL: http://searxng:8080/
+      GRANIAN_HOST: 0.0.0.0          # bind IPv4: many Docker hosts have no IPv6 inside containers
+    secrets: [searxng_secret]
+    entrypoint: ["sh", "-c", "export SEARXNG_SECRET=\"$$(cat /run/secrets/searxng_secret)\"; exec /usr/local/searxng/entrypoint.sh"]
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks: [egress]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$(cat /run/secrets/redis_password)\" --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction"]
+    secrets: [redis_password]
+    volumes: [redis_data:/data]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" --no-auth-warning ping | grep PONG"]
+      interval: 10s
+      timeout: 3s
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes: [ollama_models:/root/.ollama]
+    networks: [models, egress]         # never published; only `research` can reach it
+    # NVIDIA GPU: uncomment
+    # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
+
+  # ------------------------------------------------------------------ WAF (optional)
+  # OWASP ModSecurity + Core Rule Set in front of the edge. Check the image's README for the
+  # full list of tuning variables (paranoia level, anomaly thresholds, exclusions).
+  waf:
+    profiles: [waf]
+    image: owasp/modsecurity-crs:4-nginx-alpine
+    restart: unless-stopped
+    environment:
+      BACKEND: https://edge:8443
+      PARANOIA: "1"
+      ANOMALY_INBOUND: "5"
+    ports: ["9443:8443"]
+    networks: [edge]
+
+  # ------------------------------------------------------------------ observability (optional)
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v2.54.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    networks: [backend, observability]
+    ports: ["127.0.0.1:9090:9090"]
+
+  alertmanager:
+    profiles: [observability]
+    image: prom/alertmanager:v0.27.0
+    volumes: [./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro]
+    networks: [observability]
+    ports: ["127.0.0.1:9093:9093"]
+
+  loki:
+    profiles: [observability]
+    image: grafana/loki:3.1.1
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    networks: [observability]
+
+  promtail:
+    profiles: [observability]
+    image: grafana/promtail:3.1.1
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [observability]
+
+  jaeger:
+    profiles: [observability]
+    image: jaegertracing/all-in-one:1.60
+    environment: { COLLECTOR_OTLP_ENABLED: "true" }
+    networks: [backend, observability]
+    ports: ["127.0.0.1:16686:16686"]   # UI. Services export with OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets: [grafana_password]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    networks: [observability]
+    ports: ["127.0.0.1:3000:3000"]
+
+networks:
+  edge: {}
+  backend: { internal: true }
+  models: { internal: true }
+  egress: {}
+  observability: {}
+
+volumes:
+  notebook_data: {}
+  redis_data: {}
+  ollama_models: {}
+  prometheus_data: {}
+  grafana_data: {}
+
+secrets:
+  auth_password: { file: ../secrets/auth_password.txt }
+  internal_token: { file: ../secrets/internal_token.txt }
+  redis_password: { file: ../secrets/redis_password.txt }
+  grafana_password: { file: ../secrets/grafana_password.txt }
+  searxng_secret: { file: ../secrets/searxng_secret.txt }

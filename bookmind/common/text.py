@@ -97,7 +97,7 @@ def extractive_answer(mode: str, selection: str, related: list[dict], definition
             for d in matched_defs[:6]
         ]
     if related:
-        parts.append("## What the documents say" if mode == "research" else "## Related wording elsewhere")
+        parts.append("## Related wording elsewhere" if mode == "simplify" else "## What the documents say")
         for r in related[:4]:
             picks = best_sentences(selection, r.get("text") or r.get("snippet", ""), 2)
             if picks:

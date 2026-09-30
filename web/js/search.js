@@ -82,14 +82,14 @@ export function searchNotes(notes, query, k = 8) {
   if (!q.size) return [];
   return notes
     .map((n) => {
-      const toks = tokenize(`${n.selection} ${n.answer}`);
+      const toks = tokenize(`${n.selection} ${n.answer || ""} ${n.comment || ""} ${n.session || ""}`);
       const score = toks.filter((w) => q.has(w)).length / (1 + Math.sqrt(toks.length));
       return { n, score };
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, k)
-    .map(({ n, score }) => ({ id: n.id, doc: n.doc, docShort: n.doc_short, page: n.page, mode: n.mode, selection: excerpt(n.selection, 200), score }));
+    .map(({ n, score }) => ({ id: n.id, doc: n.doc, docShort: n.doc_short, page: n.page, mode: n.mode, selection: excerpt(n.selection, 200), comment: excerpt(n.comment || "", 160), session: n.session || "", score }));
 }
 
 const DEF_RE = /[“"]([^”"]{2,60})[”"]\s+(means|has the meaning|includes)\s+([^;]{5,400})/g;

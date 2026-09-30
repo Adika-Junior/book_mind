@@ -63,8 +63,19 @@ V2_COLUMNS = {
     "related": "TEXT DEFAULT '[]'",
     "created_at": "INTEGER",
     "updated_at": "INTEGER",
+    # v2.2 research workspace: your own words, the research session a note is filed under, a
+    # highlight colour, and the exact page it anchors to.
+    "comment": "TEXT DEFAULT ''",
+    "session": "TEXT DEFAULT ''",
+    "color": "TEXT",
+    "chunk_id": "TEXT",
 }
-FIELDS = ["id", "doc", "doc_short", "page", "mode", "selection", "answer", "status", "model", "source", "related", "created_at", "updated_at"]
+FIELDS = [
+    "id", "doc", "doc_short", "page", "mode", "selection", "answer", "status", "model", "source", "related",
+    "created_at", "updated_at", "comment", "session", "color", "chunk_id",
+]
+# research / simplify / ask are answered from the documents; highlight and note are the reader's own.
+NoteMode = Literal["research", "simplify", "ask", "highlight", "note"]
 
 
 @contextmanager
@@ -121,7 +132,7 @@ class NoteIn(BaseModel):
     doc: str = Field(..., max_length=40)
     doc_short: str | None = Field(None, max_length=40)
     page: int = Field(..., ge=0, le=100_000)
-    mode: Literal["research", "simplify"]
+    mode: NoteMode
     selection: str = Field(..., max_length=5000)
     answer: str = Field("", max_length=50_000)
     status: Literal["pending", "done", "error"] = "done"
@@ -130,6 +141,10 @@ class NoteIn(BaseModel):
     related: list[RelatedRef] = Field(default_factory=list, max_length=20)
     created_at: int | None = None
     updated_at: int | None = None
+    comment: str = Field("", max_length=10_000)
+    session: str = Field("", max_length=80)
+    color: str | None = Field(None, pattern=r"^[a-z]{1,12}$")
+    chunk_id: str | None = Field(None, max_length=64)
 
 
 def upsert_note(note_id: str, note: NoteIn) -> dict:
@@ -161,6 +176,10 @@ def upsert_note(note_id: str, note: NoteIn) -> dict:
             "related": json.dumps([r.model_dump() for r in note.related]),
             "created_at": (current["created_at"] if current else None) or note.created_at or now,
             "updated_at": updated_at,
+            "comment": note.comment,
+            "session": note.session.strip(),
+            "color": note.color,
+            "chunk_id": note.chunk_id,
         }
         conn.execute(
             f"INSERT OR REPLACE INTO notes({','.join(FIELDS)}, ts) VALUES ({','.join('?' * len(FIELDS))}, ?)",  # noqa: S608
@@ -276,10 +295,19 @@ app.state.readiness["database"] = _db_ready
 
 
 @app.get("/v1/notes")
-def list_notes(include_deleted: bool = False, limit: int = Query(500, ge=1, le=5000)):
+def list_notes(include_deleted: bool = False, limit: int = Query(500, ge=1, le=5000), session: str | None = None):
     with db() as conn:
-        rows = conn.execute("SELECT * FROM notes ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
+        if session is not None:
+            rows = conn.execute(
+                "SELECT * FROM notes WHERE session=? ORDER BY updated_at DESC LIMIT ?", (session, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM notes ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
         out: dict = {"notes": [row_to_note(r) for r in rows]}
+        out["sessions"] = [
+            {"name": r["session"], "count": r["n"]}
+            for r in conn.execute("SELECT session, COUNT(*) AS n FROM notes WHERE session != '' GROUP BY session ORDER BY session")
+        ]
         if include_deleted:
             out["tombstones"] = [dict(r) for r in conn.execute("SELECT id, updated_at FROM tombstones")]
     return out

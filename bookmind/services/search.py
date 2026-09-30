@@ -99,7 +99,8 @@ class NotesProjection:
         if kind == "deleted":
             self.notes.pop(nid, None)
         else:
-            self.notes[nid] = {**note, "_tokens": tokenize(f"{note.get('selection', '')} {note.get('answer', '')}")}
+            text = f"{note.get('selection', '')} {note.get('answer', '')} {note.get('comment', '')} {note.get('session', '')}"
+            self.notes[nid] = {**note, "_tokens": tokenize(text)}
 
     def query(self, q: str, k: int = 10) -> list[dict]:
         qt = set(tokenize(q))
@@ -120,6 +121,8 @@ class NotesProjection:
                 "page": n["page"],
                 "mode": n["mode"],
                 "selection": excerpt(n.get("selection", ""), 200),
+                "comment": excerpt(n.get("comment") or "", 160),
+                "session": n.get("session") or "",
                 "score": round(s, 3),
             }
             for s, n in scored[:k]

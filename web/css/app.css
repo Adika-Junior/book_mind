@@ -122,7 +122,9 @@ button { cursor: pointer; }
 .banner.info { background: var(--surface-2); color: var(--ink); border-bottom: 1px solid var(--line-strong); }
 
 /* ------------------------------------------------------------------ layout */
-.shell { flex: 1; display: flex; min-height: 0; position: relative; overflow: hidden; } /* clips off-screen drawers so phones never zoom out */
+.shell { flex: 1; display: flex; min-height: 0; position: relative; overflow: hidden;
+  /* Everything ends above the fixed read-aloud bar, so no control is ever hidden beneath it. */
+  margin-bottom: calc(var(--audiobar-h) + env(safe-area-inset-bottom, 0px)); } /* clips off-screen drawers so phones never zoom out */
 .nav {
   position: absolute; inset: 0 auto 0 0; z-index: 35;
   width: min(320px, 86vw);
@@ -130,7 +132,7 @@ button { cursor: pointer; }
   background: var(--chrome); color: var(--chrome-ink);
   transform: translateX(-102%); transition: transform .24s ease, visibility .24s;
   visibility: hidden;
-  padding: 12px 10px calc(var(--audiobar-h) + 24px + env(safe-area-inset-bottom, 0px)) max(10px, env(safe-area-inset-left, 0px));
+  padding: 12px 10px 24px max(10px, env(safe-area-inset-left, 0px));
   overflow-y: auto; overscroll-behavior: contain;
   box-shadow: var(--shadow);
 }
@@ -181,8 +183,8 @@ button { cursor: pointer; }
 .reader { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .reader-scroll {
   flex: 1; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-  padding: 16px max(12px, env(safe-area-inset-right, 0px)) calc(var(--audiobar-h) + 40px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
-  scroll-padding: 80px 0 calc(var(--audiobar-h) + 80px);
+  padding: 16px max(12px, env(safe-area-inset-right, 0px)) 40px max(12px, env(safe-area-inset-left, 0px));
+  scroll-padding: 80px 0 80px;
 }
 /* The reading column: its width is the chosen measure in characters of the chosen typeface
    (50–75 characters per line, Dyson & Haselgrove 2001), plus the page's own padding. */
@@ -348,7 +350,7 @@ button { cursor: pointer; }
 .panel-head .iconbtn { color: var(--ink); }
 .panel-head .iconbtn:hover { background: var(--hl-spoken); }
 .panel-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 14px 14px 24px; }
-.panel-foot { display: flex; gap: 8px; padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line-strong); background: var(--surface); }
+.panel-foot { display: flex; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line-strong); background: var(--surface); }
 .panel-foot .btn { flex: 1; }
 .empty { color: var(--ink-soft); font-size: 14px; line-height: 1.65; padding: 24px 6px; }
 .empty strong { color: var(--ink); }
@@ -473,6 +475,9 @@ input[type="range"] { accent-color: var(--chrome-accent); width: 92px; }
   .panel:not(.open) { margin-right: -400px; visibility: hidden; }
   .scrim.panel-scrim { display: none; }
 }
+@media (max-width: 440px) {
+  .topbar:has(#netChip:not([hidden])) .brand-text { display: none; } /* keep the logo; room for the status chip */
+}
 @media (max-width: 380px) {
   .brand .sub { display: none; }
   .iconbtn { width: 40px; }
@@ -496,3 +501,48 @@ input[type="range"] { accent-color: var(--chrome-accent); width: 92px; }
 }
 .popover.top label { color: var(--chrome-soft); }
 .popover.top #sizeOut { color: var(--chrome-ink); font-weight: 700; }
+
+/* ------------------------------------------------------------------ research workspace */
+.iconbtn.labelled { width: auto; padding: 0 10px; gap: 6px; }
+.iconbtn .btn-label { display: none; font-size: 13.5px; font-weight: 700; }
+@media (min-width: 600px) { .iconbtn .btn-label { display: inline; } .iconbtn.labelled .badge { position: static; margin-left: 2px; } }
+.seltoolbar { flex-wrap: wrap; justify-content: center; }
+@media (max-width: 420px) { .seltoolbar button { padding: 6px 9px; font-size: 13px; } }
+
+.nb-tools { display: grid; gap: 14px; padding: 2px 0 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line-strong); }
+.nb-tools label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 6px; }
+.nb-tools label .icon { width: 16px; height: 16px; }
+.nb-row { display: flex; gap: 8px; align-items: stretch; }
+.nb-row > select, .nb-row > input, .nb-row > textarea { flex: 1; min-width: 0; }
+.nb-tools select, .nb-tools input, .nb-tools textarea, .comment-edit {
+  min-height: 40px; padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 14.5px;
+}
+.nb-tools textarea, .comment-edit { resize: vertical; line-height: 1.45; }
+.nb-tools .hint, .note .hint { font-size: 12.5px; color: var(--ink-soft); margin: 6px 0 0; line-height: 1.45; }
+.nb-ask { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.nb-filters button { background: var(--surface); color: var(--ink); border-color: var(--line-strong); font-size: 12.5px; min-height: 36px; }
+.nb-filters button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: none; }
+.nb-filters .n { opacity: .75; font-weight: 600; margin-left: 2px; }
+
+.note.kind-highlight { border-left-color: var(--accent); }
+.note.kind-note { border-left-color: var(--secondary); }
+.note.kind-ask { border-left-color: var(--link); }
+.note.kind-highlight blockquote { font-style: normal; color: var(--ink); background: color-mix(in srgb, var(--accent) 16%, transparent); border-left-color: var(--accent); padding: 6px 10px; border-radius: 0 4px 4px 0; }
+.note .question { font-family: var(--serif); font-weight: 700; font-size: 15.5px; color: var(--heading); margin: 0 0 8px; }
+.note .comment { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--secondary) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--secondary) 35%, transparent); font-size: 14.5px; line-height: 1.55; }
+.note .comment p { margin: 0 0 6px; }
+.note .comment-label { display: block; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 4px; }
+.note .comment-edit { width: 100%; }
+.note .comment.editing .row { margin-top: 8px; }
+.note .actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; justify-content: flex-end; }
+.note select.move { max-width: 140px; min-height: 30px; padding: 2px 6px; font-size: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); }
+.tag.session { background: color-mix(in srgb, var(--secondary) 18%, transparent); border-color: var(--secondary); }
+.note.flash { animation: flash 1.6s ease; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.empty ul { margin: 8px 0; padding-left: 20px; }
+
+/* Your highlights and notes, shown back on the page. */
+.page-body .sentence.saved-hl { background: color-mix(in srgb, var(--accent) 24%, transparent); cursor: pointer; }
+.page-body .sentence.saved-note { box-shadow: inset 0 -2px 0 var(--secondary); cursor: pointer; }
+.page-body .sentence.saved.reading { background: var(--hl-reading); }

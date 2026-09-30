@@ -51,6 +51,19 @@ no content is lost.
 | **Defined terms** (from the Bill's interpretation clause), dotted underline on first use, tap for the definition and its citation | Jargon explained in the law's own words, in place | Signaling key vocabulary. Shown once per page so the page isn't shouting at you. |
 | **Focus mode** (optional): other paragraphs dim | Fewer distractions while reading or listening | Plausible, but *not strongly evidenced*, so it is off by default. |
 
+## 2b. The research workspace (notebook)
+
+Reading to understand a law is active work: marking, annotating, asking and gathering evidence.
+The notebook supports that loop without leaving the page.
+
+| Feature | Why |
+|---|---|
+| **Highlight** and **Note** straight from a selection; highlights shown back on the page | Keeping your own marks where they were made supports re-finding and review. It also makes readers select what matters, rather than saving everything. |
+| **Your note** on any item, including AI answers | Writing in your own words (elaboration) is how understanding sticks; the answer alone is not the goal. |
+| **Ask the documents** with page citations | Turns a question into evidence you can check. Answers say where they came from, and fall back to quoted passages when the model is unavailable. |
+| **Research sessions** (one per topic) and **Export brief** | Segmenting a large task into topics (Mayer's segmenting principle), and ending with a tangible output that has references. |
+| Filters, notebook search, **reading order** sort | Review follows the structure of the documents, not the order you happened to click. |
+
 ## 3. Colour: three palettes, three moods
 
 Colour carries meaning and affects affect, cognition and behaviour, but its effects depend on

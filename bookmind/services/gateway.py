@@ -235,7 +235,7 @@ async def unified_search(q: str = Query(..., min_length=1, max_length=500), k: i
 
 
 class ResearchRequest(BaseModel):
-    mode: str = Field(..., pattern="^(research|simplify)$")
+    mode: str = Field(..., pattern="^(research|simplify|ask)$")
     selection: str = Field(..., min_length=1, max_length=settings.max_selection_chars)
     doc: str = Field(..., max_length=40)
     doc_title: str = Field(..., max_length=200)
@@ -245,6 +245,7 @@ class ResearchRequest(BaseModel):
     chunk_id: str | None = Field(None, max_length=64)
     save: bool = False
     note_id: str | None = Field(None, pattern=NOTE_ID)
+    session: str = Field("", max_length=80)
 
 
 def _generate_payload(req: ResearchRequest) -> dict:
@@ -258,6 +259,8 @@ def _note_payload(req: ResearchRequest, **extra) -> dict:
         "page": req.page,
         "mode": req.mode,
         "selection": req.selection,
+        "session": req.session,
+        "chunk_id": req.chunk_id,
         **extra,
     }
 
@@ -299,7 +302,7 @@ def research_and_save_saga(req: ResearchRequest) -> Saga:
 @app.post("/api/v1/research")
 async def research_endpoint(req: ResearchRequest, request: Request):
     current = await flags.all()
-    if not current.get(f"{req.mode}_enabled", True):
+    if not current.get(f"{'research' if req.mode == 'ask' else req.mode}_enabled", True):
         raise HTTPException(403, f"'{req.mode}' is switched off right now.")
     if req.save and not req.note_id:
         raise HTTPException(422, "note_id is required when save=true")

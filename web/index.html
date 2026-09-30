@@ -41,6 +41,9 @@
   <symbol id="i-speak" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></symbol>
   <symbol id="i-type" viewBox="0 0 24 24"><path d="M3 19 8.5 5h1L15 19M5.2 14h7.6M15.5 19l3-8 3 8M16.4 16.5h4.2"/></symbol>
+  <symbol id="i-mark" viewBox="0 0 24 24"><path d="m9 15 6-6 3 3-6 6H9z"/><path d="m15 9 2-2 3 3-2 2M4 20h16"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/></symbol>
+  <symbol id="i-ask" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4z"/><path d="M10 8.5a2 2 0 1 1 2.7 1.9c-.5.2-.7.6-.7 1.1M12 13.2v.1"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/></symbol>
 </svg>
 
@@ -57,7 +60,7 @@
   <button class="iconbtn" id="searchBtn" aria-label="Search the documents and your notes (/)"><svg class="icon"><use href="#i-search"/></svg></button>
   <button class="iconbtn" id="settingsBtn" aria-label="Reading settings: colours, typeface, size and spacing" aria-expanded="false" aria-controls="settingsPanel"><svg class="icon"><use href="#i-type"/></svg></button>
   <button class="iconbtn" id="themeBtn" aria-label="Switch light or dark theme"><svg class="icon"><use id="themeIcon" href="#i-moon"/></svg></button>
-  <button class="iconbtn" id="notebookBtn" aria-label="Notebook" aria-expanded="false" aria-controls="notebook"><svg class="icon"><use href="#i-book"/></svg><span class="badge" id="noteCount" hidden></span></button>
+  <button class="iconbtn labelled" id="notebookBtn" aria-label="Notebook: your highlights, notes and research" aria-expanded="false" aria-controls="notebook"><svg class="icon"><use href="#i-book"/></svg><span class="btn-label">Notebook</span><span class="badge" id="noteCount" hidden></span></button>
 </header>
 
 <div class="reading-progress" role="progressbar" aria-label="Progress through this document" aria-valuemin="0" aria-valuemax="100" id="docProgress"><span id="docProgressFill"></span></div>
@@ -110,15 +113,39 @@
       <h2>Notebook</h2>
       <button class="iconbtn" id="notebookClose" aria-label="Close notebook"><svg class="icon"><use href="#i-close"/></svg></button>
     </div>
-    <div class="panel-body" id="notesList"></div>
+    <div class="panel-body">
+      <div class="nb-tools">
+        <div class="nb-session">
+          <label for="sessionSelect">Research session</label>
+          <div class="nb-row"><select id="sessionSelect"></select><button type="button" class="btn ghost small" id="newSessionBtn">New session</button></div>
+          <form id="newSessionForm" class="nb-row" hidden><input id="newSessionName" maxlength="80" placeholder="e.g. Penalties &amp; enforcement" aria-label="New session name" autocomplete="off"><button type="submit" class="btn small">Create</button></form>
+          <p class="hint" id="sessionHint"></p>
+        </div>
+        <form id="askForm" class="nb-ask">
+          <label for="askInput"><svg class="icon"><use href="#i-ask"/></svg>Ask the documents</label>
+          <div class="nb-row"><textarea id="askInput" rows="2" maxlength="2000" placeholder="e.g. Who appoints the AI Commissioner, and for how long?"></textarea><button type="submit" class="btn small">Ask</button></div>
+          <p class="hint">Answered from all four documents, with page citations. Works offline too (quoted, without the model).</p>
+        </form>
+        <div class="seg nb-filters" id="nbFilters" role="group" aria-label="Show">
+          <button type="button" data-f="all">All <span class="n"></span></button>
+          <button type="button" data-f="highlights">Highlights <span class="n"></span></button>
+          <button type="button" data-f="mine">My notes <span class="n"></span></button>
+          <button type="button" data-f="research">Research <span class="n"></span></button>
+        </div>
+        <div class="nb-row"><input id="nbQuery" type="search" placeholder="Search your notebook" aria-label="Search your notebook" autocomplete="off"><button type="button" class="linkbtn" id="nbOrder">Newest first</button></div>
+      </div>
+      <div id="notesList"></div>
+    </div>
     <div class="panel-foot">
       <button class="btn ghost small" id="syncBtn" type="button"><svg class="icon"><use href="#i-cloud"/></svg>Sync now</button>
-      <button class="btn small" id="exportBtn" type="button" disabled><svg class="icon"><use href="#i-download"/></svg>Export .md</button>
+      <button class="btn small" id="exportBtn" type="button" disabled><svg class="icon"><use href="#i-download"/></svg>Export brief</button>
     </div>
   </aside>
 </div>
 
 <div class="seltoolbar" id="selToolbar" role="toolbar" aria-label="Selection actions">
+  <button type="button" id="btnHighlight"><svg class="icon"><use href="#i-mark"/></svg>Highlight</button>
+  <button type="button" id="btnNote"><svg class="icon"><use href="#i-pen"/></svg>Note</button>
   <button type="button" id="btnResearch"><svg class="icon"><use href="#i-spark"/></svg>Research</button>
   <button type="button" id="btnSimplify"><svg class="icon"><use href="#i-bulb"/></svg>Simplify</button>
   <button type="button" id="btnReadHere"><svg class="icon"><use href="#i-speak"/></svg>Read from here</button>

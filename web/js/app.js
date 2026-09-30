@@ -283,6 +283,7 @@ function renderPage({ keepSpeech = false } = {}) {
   $("pageInput").max = d.chunks.length;
   $("pageTotal").textContent = `of ${d.chunks.length}`;
   renderBlocks($("pageBody"), c, d.id);
+  paintSavedHighlights();
   renderUpNext(d);
   closeTermPop();
 
@@ -604,11 +605,31 @@ const onSelection = debounce(() => {
   toolbar.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
 }, 120);
 
-/* =========================================================== research */
+/* =========================================================== research workspace: notes, sessions, ask */
+
+// Every saved item is a "note". Some are answered from the documents (research, simplify, ask);
+// some are the reader's own (highlight, note). All can carry the reader's own words (comment) and
+// be filed in a research session.
+const KIND = {
+  highlight: { label: "Highlight", group: "highlights" },
+  note: { label: "My note", group: "mine" },
+  research: { label: "Research", group: "research" },
+  simplify: { label: "Simplified", group: "research" },
+  ask: { label: "Question", group: "research" },
+};
+const nb = { filter: "all", query: "", order: "newest", editing: null };
+const activeSession = () => store.prefs.get("session", "");
+
+function sessionNames() {
+  const set = new Set(store.prefs.get("sessions", []));
+  for (const n of state.notes) if (n.session) set.add(n.session);
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
 
 const toServer = (n) => ({
-  doc: n.doc, doc_short: n.doc_short, page: n.page, mode: n.mode, selection: n.selection, answer: n.answer,
+  doc: n.doc, doc_short: n.doc_short, page: n.page, mode: n.mode, selection: n.selection, answer: n.answer || "",
   status: n.status, model: n.model, source: n.source, related: (n.related || []).slice(0, 20), created_at: n.created_at, updated_at: n.updated_at,
+  comment: n.comment || "", session: n.session || "", color: n.color || null, chunk_id: n.chunk_id || null,
 });
 async function queuePut(note) {
   await store.enqueue({ op: "put", id: note.id, payload: toServer(note) });
@@ -620,28 +641,75 @@ function requestBackgroundSync() {
   navigator.serviceWorker?.ready.then((reg) => reg.sync && reg.sync.register("bookmind-sync")).catch(() => {});
 }
 
-async function research(mode) {
-  let selection = state.selection;
-  hideToolbar();
-  getSelection()?.removeAllRanges();
-  if (!selection) return;
-  if (selection.length > state.limits.max_selection_chars) {
-    selection = selection.slice(0, state.limits.max_selection_chars);
-    toast("That's a long selection — using the first part.");
-  }
+function newNote(mode, selection, extra = {}) {
   const d = DOC();
   const c = d.chunks[state.idx];
   const now = Date.now();
-  const note = {
-    id: `n${now.toString(36)}${rand()}`, doc: d.id, doc_short: d.short, page: state.idx + 1, mode, selection,
-    answer: "", status: "pending", model: null, source: null, related: [], created_at: now, updated_at: now, synced: false,
+  return {
+    id: `n${now.toString(36)}${rand()}`, doc: d.id, doc_short: d.short, page: state.idx + 1, chunk_id: c.id, mode, selection,
+    answer: "", comment: "", session: activeSession(), color: null, status: "done", model: null, source: null, related: [],
+    created_at: now, updated_at: now, synced: false, ...extra,
   };
+}
+
+/** Persist locally first (works offline), then queue for the server. */
+async function saveNote(note) {
+  note.updated_at = Math.max(Date.now(), (note.updated_at || 0) + 1);
+  note.synced = false;
+  await store.putNote(note);
+  await queuePut(note);
+  sync.schedule(400);
+}
+
+function takeSelection() {
+  let text = state.selection;
+  hideToolbar();
+  getSelection()?.removeAllRanges();
+  if (text && text.length > state.limits.max_selection_chars) {
+    text = text.slice(0, state.limits.max_selection_chars);
+    toast("That's a long selection — using the first part.");
+  }
+  return text;
+}
+
+const filedIn = () => (activeSession() ? ` · filed in “${activeSession()}”` : "");
+
+async function addHighlight() {
+  const selection = takeSelection();
+  if (!selection) return;
+  const note = newNote("highlight", selection, { color: "accent" });
   state.notes.unshift(note);
+  await saveNote(note);
+  renderNotes();
+  paintSavedHighlights();
+  toast(`Highlighted${filedIn() || " · saved to your notebook"}`);
+}
+
+async function addOwnNote() {
+  const selection = takeSelection();
+  if (!selection) return;
+  const note = newNote("note", selection);
+  state.notes.unshift(note);
+  await saveNote(note);
+  nb.editing = note.id;
+  nb.filter = "all";
+  paintSavedHighlights();
+  openNote(note.id);
+}
+
+async function research(mode, text) {
+  const selection = text ?? takeSelection();
+  if (!selection) return;
+  const d = DOC();
+  const c = d.chunks[state.idx];
+  const note = newNote(mode, selection, { status: "pending" });
+  state.notes.unshift(note);
+  nb.filter = "all";
   renderNotes();
   openNotebook();
 
   const offline = (reason) => {
-    Object.assign(note, extractiveAnswer(mode, selection, state.chunks, reason, c.id), { status: "done", updated_at: Date.now(), synced: false, reason });
+    Object.assign(note, extractiveAnswer(mode, selection, state.chunks, reason, mode === "ask" ? null : c.id), { status: "done", updated_at: Date.now(), synced: false, reason });
   };
   if (!navigator.onLine) offline("you're offline");
   else {
@@ -652,7 +720,7 @@ async function research(mode) {
         idempotencyKey: note.id,
         body: {
           mode, selection, doc: d.id, doc_title: d.title, doc_short: d.short, page: state.idx + 1,
-          context_text: c.text.slice(0, state.limits.max_context_chars), chunk_id: c.id, save: true, note_id: note.id,
+          context_text: c.text.slice(0, state.limits.max_context_chars), chunk_id: c.id, save: true, note_id: note.id, session: note.session,
         },
       });
       Object.assign(note, {
@@ -681,7 +749,7 @@ async function research(mode) {
   sync.schedule(400);
 }
 
-/* =========================================================== notebook */
+/* ---------------------------------------------------------------- notebook rendering */
 
 function sourceTags(n) {
   const tags = [];
@@ -692,65 +760,243 @@ function sourceTags(n) {
   return tags.join("");
 }
 
+function visibleNotes() {
+  const session = activeSession();
+  const q = tokenize(nb.query);
+  let list = state.notes.filter((n) => (!session || n.session === session) && (nb.filter === "all" || (KIND[n.mode] || KIND.research).group === nb.filter));
+  if (q.length) {
+    list = list.filter((n) => {
+      const words = new Set(tokenize(`${n.selection} ${n.answer || ""} ${n.comment || ""}`));
+      return q.every((w) => words.has(w));
+    });
+  }
+  if (nb.order === "reading") {
+    list = [...list].sort((a, b) => state.order.indexOf(a.doc) - state.order.indexOf(b.doc) || a.page - b.page || a.created_at - b.created_at);
+  }
+  return list;
+}
+
+function renderSessionControls() {
+  const sel = $("sessionSelect");
+  const current = activeSession();
+  const counts = {};
+  state.notes.forEach((n) => { if (n.session) counts[n.session] = (counts[n.session] || 0) + 1; });
+  sel.textContent = "";
+  sel.add(new Option(`All notes (${state.notes.length})`, ""));
+  for (const name of sessionNames()) sel.add(new Option(`${name} (${counts[name] || 0})`, name));
+  sel.value = current;
+  $("sessionHint").textContent = current
+    ? `New highlights, notes and answers are filed in “${current}”.`
+    : "Showing everything. Pick or create a session to file new work under a topic.";
+  const groups = { all: 0, highlights: 0, mine: 0, research: 0 };
+  state.notes.forEach((n) => {
+    if (current && n.session !== current) return;
+    groups.all++;
+    groups[(KIND[n.mode] || KIND.research).group]++;
+  });
+  document.querySelectorAll("#nbFilters button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.f === nb.filter));
+    b.querySelector(".n").textContent = groups[b.dataset.f];
+  });
+  $("nbOrder").textContent = nb.order === "newest" ? "Newest first" : "Reading order";
+}
+
+function noteCard(n) {
+  const kind = KIND[n.mode] || KIND.research;
+  const card = document.createElement("article");
+  card.className = `note kind-${n.mode}`;
+  card.id = "note-" + n.id;
+  const sessionTag = n.session && !activeSession() ? `<span class="tag session">${escapeHtml(n.session)}</span>` : "";
+  let html = `<div class="cite"><a href="#" class="goto">${escapeHtml(n.doc_short)}, p.${n.page}</a> · ${kind.label} ${sessionTag}${kind.group === "research" ? sourceTags(n) : (!n.synced ? '<span class="tag">Not synced</span>' : "")}</div>`;
+  if (n.mode === "ask") html += `<p class="question">${escapeHtml(n.selection)}</p>`;
+  else html += `<blockquote>${escapeHtml(excerpt(n.selection, n.mode === "highlight" ? 600 : 260))}</blockquote>`;
+  if (kind.group === "research") {
+    html += n.status === "pending"
+      ? '<div class="thinking"><span class="spinner"></span> Reading across the documents…</div>'
+      : `<div class="answer">${renderMD(n.answer)}</div>`;
+  }
+  if (nb.editing === n.id) {
+    html += `<div class="comment editing"><label class="comment-label" for="edit-${n.id}">Your note</label>
+      <textarea id="edit-${n.id}" class="comment-edit" rows="4" placeholder="Your thoughts, questions, how this connects to other clauses…">${escapeHtml(n.comment || "")}</textarea>
+      <div class="row"><span class="hint">Ctrl/⌘ + Enter to save</span><span><button type="button" class="linkbtn cancel">Cancel</button> <button type="button" class="btn small save">Save note</button></span></div></div>`;
+  } else if (n.comment) {
+    html += `<div class="comment"><span class="comment-label">Your note</span>${renderMD(n.comment)}</div>`;
+  }
+  const options = ['<option value="">No session</option>', ...sessionNames().map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`)].join("");
+  html += `<div class="row"><span>${timeAgo(n.created_at || Date.now())}</span><span class="actions">
+    ${nb.editing === n.id ? "" : `<button type="button" class="linkbtn edit">${n.comment ? "Edit note" : "Add your note"}</button>`}
+    <select class="move" aria-label="File in session">${options}</select>
+    <button type="button" class="linkbtn remove">Remove</button></span></div>`;
+  card.innerHTML = html;
+  card.querySelector(".move").value = n.session || "";
+
+  card.querySelector(".goto").addEventListener("click", (e) => {
+    e.preventDefault();
+    goTo(n.doc, n.page - 1, { jump: true });
+    if (n.mode !== "ask") highlightQuery(n.selection);
+    if (!mq.panel.matches) closeNotebook();
+  });
+  card.querySelector(".remove").addEventListener("click", () => removeNote(n));
+  card.querySelector(".move").addEventListener("change", async (e) => {
+    n.session = e.target.value;
+    await saveNote(n);
+    renderNotes();
+    toast(n.session ? `Filed in “${n.session}”.` : "Removed from its session.");
+  });
+  card.querySelector(".edit")?.addEventListener("click", () => { nb.editing = n.id; renderNotes(); focusEditor(n.id); });
+  const save = async () => {
+    n.comment = card.querySelector(".comment-edit").value.trim();
+    nb.editing = null;
+    await saveNote(n);
+    renderNotes();
+    paintSavedHighlights();
+    toast("Note saved.");
+  };
+  card.querySelector(".save")?.addEventListener("click", save);
+  card.querySelector(".cancel")?.addEventListener("click", () => {
+    nb.editing = null;
+    if (n.mode === "note" && !n.comment) removeNote(n); // an empty "Add note" that was abandoned
+    else renderNotes();
+  });
+  card.querySelector(".comment-edit")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); }
+    if (e.key === "Escape") { e.stopPropagation(); card.querySelector(".cancel").click(); }
+  });
+  return card;
+}
+
 function renderNotes() {
-  const list = $("notesList");
   const count = state.notes.length;
   $("noteCount").hidden = !count;
   $("noteCount").textContent = count > 99 ? "99+" : String(count);
   $("exportBtn").disabled = !count;
+  renderSessionControls();
+  const list = $("notesList");
+  list.textContent = "";
   if (!count) {
-    list.innerHTML = '<div class="empty">Select any passage in the book and choose <strong>Research</strong> or <strong>Simplify</strong>. Cited notes collect here — on this device first, then synced to your server.<br><br>No connection? You still get a grounded note quoted from the documents.</div>';
+    list.innerHTML = `<div class="empty"><strong>Your research notebook.</strong> Select any passage while reading, then:
+      <ul><li><strong>Highlight</strong> to keep it,</li><li><strong>Note</strong> to write your own thoughts about it,</li>
+      <li><strong>Research</strong> or <strong>Simplify</strong> for a cited explanation,</li></ul>
+      or type a question in <strong>Ask the documents</strong> above. Group work into <strong>sessions</strong> (one per topic) and export a session as a research brief. Everything is saved on this device first, then synced.</div>`;
     return;
   }
-  list.textContent = "";
-  for (const n of state.notes) {
-    const card = document.createElement("article");
-    card.className = "note" + (n.mode === "simplify" ? " simplify" : "");
-    card.id = "note-" + n.id;
-    let html = `<div class="cite"><a href="#" class="goto">${escapeHtml(n.doc_short)}, p.${n.page}</a> · ${n.mode === "simplify" ? "Simplified" : "Research"} ${sourceTags(n)}</div>`;
-    html += `<blockquote>${escapeHtml(excerpt(n.selection, 240))}</blockquote>`;
-    if (n.status === "pending") html += '<div class="thinking"><span class="spinner"></span> Reading across the documents…</div>';
-    else html += `<div class="answer">${renderMD(n.answer)}</div>`;
-    html += `<div class="row"><span>${timeAgo(n.created_at || Date.now())}</span><button type="button" class="linkbtn remove">Remove</button></div>`;
-    card.innerHTML = html;
-    card.querySelector(".goto").addEventListener("click", (e) => {
-      e.preventDefault();
-      goTo(n.doc, n.page - 1, { jump: true });
-      highlightQuery(n.selection);
-      if (!mq.panel.matches) closeNotebook();
-    });
-    card.querySelector(".remove").addEventListener("click", () => removeNote(n));
-    list.appendChild(card);
+  const shown = visibleNotes();
+  if (!shown.length) {
+    list.innerHTML = '<div class="empty">Nothing here matches. Try another filter or session.</div>';
+    return;
   }
+  for (const n of shown) list.appendChild(noteCard(n));
+}
+
+function focusEditor(id) {
+  requestAnimationFrame(() => {
+    const ta = document.getElementById(`edit-${id}`);
+    if (ta) { ta.focus(); ta.scrollIntoView({ block: "center" }); }
+  });
+}
+
+function openNote(id) {
+  const n = state.notes.find((x) => x.id === id);
+  if (!n) return;
+  if (activeSession() && n.session !== activeSession()) store.prefs.set("session", "");
+  nb.filter = "all";
+  nb.query = "";
+  $("nbQuery").value = "";
+  renderNotes();
+  openNotebook();
+  requestAnimationFrame(() => {
+    const el = document.getElementById("note-" + id);
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1600);
+    if (nb.editing === id) focusEditor(id);
+  });
 }
 
 async function removeNote(n) {
   state.notes = state.notes.filter((x) => x.id !== n.id);
+  if (nb.editing === n.id) nb.editing = null;
   renderNotes();
+  paintSavedHighlights();
   await store.deleteNote(n.id);
   await store.enqueue({ op: "delete", id: n.id, updated_at: Math.max(Date.now(), (n.updated_at || 0) + 1) });
   requestBackgroundSync();
   sync.schedule(300);
-  toast("Note removed.");
+  toast("Removed from your notebook.");
 }
 
-function exportNotes() {
-  let md = "# BookMind research notebook\n\n";
-  for (const n of [...state.notes].reverse()) {
-    if (n.status !== "done") continue;
-    md += `## ${n.mode === "simplify" ? "Simplified" : "Research"} — ${n.doc_short}, p.${n.page}\n\n`;
-    md += `> ${n.selection.replace(/\n/g, " ")}\n\n${n.answer}\n\n---\n\n`;
+/** Saved highlights and notes are shown on the page they came from; tap one to open it. */
+function paintSavedHighlights() {
+  const body = $("pageBody");
+  if (!body || !state.doc) return;
+  body.querySelectorAll(".saved").forEach((el) => { el.classList.remove("saved", "saved-hl", "saved-note"); delete el.dataset.note; el.removeAttribute("title"); });
+  const here = state.notes.filter((n) => (n.mode === "highlight" || n.mode === "note") && n.doc === state.doc && n.page === state.idx + 1);
+  if (!here.length) return;
+  const norm = (t) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  const spans = [...body.querySelectorAll(".sentence")];
+  for (const n of here) {
+    const sel = norm(n.selection);
+    for (const s of spans) {
+      const t = norm(s.textContent);
+      if (t.length < 3) continue;
+      const hit = sel.includes(t) || t.includes(sel) || (sel.length >= 12 && (t.includes(sel.slice(0, 30)) || t.includes(sel.slice(-30))));
+      if (!hit) continue;
+      s.classList.add("saved", n.mode === "note" ? "saved-note" : "saved-hl");
+      s.dataset.note = n.id;
+      s.title = n.mode === "note" ? "Your note — tap to open" : "Your highlight — tap to open";
+    }
   }
+}
+
+/** A research brief: questions, then highlights & notes in reading order, then answers, then references. */
+function exportNotes() {
+  const session = activeSession();
+  const notes = state.notes.filter((n) => n.status === "done" && (!session || n.session === session));
+  const inReadingOrder = (a, b) => state.order.indexOf(a.doc) - state.order.indexOf(b.doc) || a.page - b.page || a.created_at - b.created_at;
+  const quote = (t) => `> ${t.replace(/\s+/g, " ").trim()}`;
+  const yours = (n) => (n.comment ? `\n\n**My note:** ${n.comment}` : "");
+  // Answers carry their own ## headings; nest them under the item's ### heading.
+  const nested = (t) => (t || "").replace(/^#{1,4}\s+/gm, "#### ");
+  let md = `# Research brief: ${session || "All notes"}\n\n_Exported ${new Date().toLocaleString()} from BookMind · ${notes.length} items._\n\n`;
+  const asks = notes.filter((n) => n.mode === "ask").sort((a, b) => a.created_at - b.created_at);
+  if (asks.length) {
+    md += "## Questions\n\n";
+    for (const n of asks) md += `### ${n.selection}\n\n${nested(n.answer)}${yours(n)}\n\n`;
+  }
+  const own = notes.filter((n) => n.mode === "highlight" || n.mode === "note").sort(inReadingOrder);
+  if (own.length) {
+    md += "## Highlights and notes (in reading order)\n\n";
+    let lastDoc = null;
+    for (const n of own) {
+      if (n.doc !== lastDoc) { md += `### ${state.byId[n.doc]?.title || n.doc_short}\n\n`; lastDoc = n.doc; }
+      md += `**p.${n.page}**\n\n${quote(n.selection)}${yours(n)}\n\n`;
+    }
+  }
+  const answers = notes.filter((n) => n.mode === "research" || n.mode === "simplify").sort(inReadingOrder);
+  if (answers.length) {
+    md += "## Research notes\n\n";
+    for (const n of answers) md += `### ${KIND[n.mode].label} — ${n.doc_short}, p.${n.page}\n\n${quote(n.selection)}\n\n${nested(n.answer)}${yours(n)}\n\n`;
+  }
+  const refs = {};
+  for (const n of notes) {
+    (refs[n.doc] ||= new Set()).add(n.page);
+    for (const r of n.related || []) { const d = docByShort(r.docShort); if (d) (refs[d.id] ||= new Set()).add(r.page); }
+  }
+  md += "## References\n\n";
+  for (const id of state.order) if (refs[id]) md += `- ${state.byId[id].title} — pp. ${[...refs[id]].sort((a, b) => a - b).join(", ")}\n`;
+  const slug = (session || "notebook").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   const url = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
-  const a = Object.assign(document.createElement("a"), { href: url, download: "bookmind-notebook.md" });
+  const a = Object.assign(document.createElement("a"), { href: url, download: `bookmind-${slug}.md` });
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  toast("Notebook exported.");
+  toast(`Research brief exported (${notes.length} items).`);
 }
 
 async function reloadNotes() {
   state.notes = await store.allNotes();
   renderNotes();
+  paintSavedHighlights();
 }
 
 /* =========================================================== search */
@@ -794,12 +1040,10 @@ const runSearch = debounce(async (q) => {
   group("In your notebook", notes, (n) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "result";
-    b.innerHTML = `<div class="where">${escapeHtml(n.docShort || n.doc)} · p.${n.page} · ${n.mode === "simplify" ? "Simplified" : "Research"}</div><div class="snippet">${escapeHtml(n.selection)}</div>`;
-    b.addEventListener("click", () => {
-      closeSearch(); openNotebook();
-      const el = document.getElementById("note-" + n.id);
-      if (el) el.scrollIntoView({ block: "start" });
-    });
+    const kind = (KIND[n.mode] || KIND.research).label;
+    b.innerHTML = `<div class="where">${escapeHtml(n.docShort || n.doc)} · p.${n.page} · ${kind}${n.session ? " · " + escapeHtml(n.session) : ""}</div>` +
+      `<div class="snippet">${escapeHtml(n.selection)}</div>${n.comment ? `<div class="snippet"><em>My note:</em> ${escapeHtml(n.comment)}</div>` : ""}`;
+    b.addEventListener("click", () => { closeSearch(); openNote(n.id); });
     return b;
   });
   if (!passages.length && !notes.length) results.innerHTML = '<div class="empty">Nothing found. Try a different word or a clause number.</div>';
@@ -964,6 +1208,8 @@ function wire() {
     const term = e.target.closest(".term");
     if (term) { e.preventDefault(); e.stopPropagation(); termPop && termPop.btn === term ? closeTermPop() : openTermPop(term); return; }
     setCurrentBlock(e.target);
+    const saved = e.target.closest(".saved");
+    if (saved && !tts.playing && getSelection().isCollapsed) openNote(saved.dataset.note);
   });
   $("pageBody").addEventListener("pointerover", (e) => { if (!mq.coarse.matches && !tts.playing) setCurrentBlock(e.target); });
   $("readerScroll").addEventListener("scroll", () => { updateDocProgress(); closeTermPop(); }, { passive: true });
@@ -1004,6 +1250,8 @@ function wire() {
   // Selection toolbar
   document.addEventListener("selectionchange", onSelection);
   toolbar.addEventListener("mousedown", (e) => e.preventDefault()); // keep the selection alive
+  $("btnHighlight").addEventListener("click", addHighlight);
+  $("btnNote").addEventListener("click", addOwnNote);
   $("btnResearch").addEventListener("click", () => research("research"));
   $("btnSimplify").addEventListener("click", () => research("simplify"));
   $("btnReadHere").addEventListener("click", () => { const i = state.selectionSentence; hideToolbar(); getSelection()?.removeAllRanges(); tts.play(i); });
@@ -1026,6 +1274,37 @@ function wire() {
 
   // Notebook
   $("exportBtn").addEventListener("click", exportNotes);
+  $("sessionSelect").addEventListener("change", (e) => {
+    store.prefs.set("session", e.target.value);
+    renderNotes();
+    if (e.target.value) toast(`Working in “${e.target.value}”.`);
+  });
+  $("newSessionBtn").addEventListener("click", () => {
+    $("newSessionForm").hidden = !$("newSessionForm").hidden;
+    if (!$("newSessionForm").hidden) $("newSessionName").focus();
+  });
+  $("newSessionForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = $("newSessionName").value.replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!name) return;
+    store.prefs.set("sessions", [...new Set([...store.prefs.get("sessions", []), name])]);
+    store.prefs.set("session", name);
+    $("newSessionName").value = "";
+    $("newSessionForm").hidden = true;
+    renderNotes();
+    toast(`Session “${name}” created — new work is filed there.`);
+  });
+  $("askForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = $("askInput").value.replace(/\s+/g, " ").trim();
+    if (q.length < 4) { toast("Type a question first."); return; }
+    $("askInput").value = "";
+    research("ask", q.slice(0, state.limits.max_selection_chars));
+  });
+  $("askInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("askForm").requestSubmit(); } });
+  $("nbFilters").addEventListener("click", (e) => { const b = e.target.closest("button[data-f]"); if (b) { nb.filter = b.dataset.f; renderNotes(); } });
+  $("nbQuery").addEventListener("input", debounce((e) => { nb.query = e.target.value; renderNotes(); }, 150));
+  $("nbOrder").addEventListener("click", () => { nb.order = nb.order === "newest" ? "reading" : "newest"; renderNotes(); });
   $("syncBtn").addEventListener("click", async () => {
     if (!navigator.onLine) { toast("You're offline — notes will sync when you reconnect."); return; }
     await sync.run();

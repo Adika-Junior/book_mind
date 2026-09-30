@@ -203,6 +203,9 @@ async def test_rate_limit_returns_429(client, monkeypatch):
         assert "Retry-After" in r.headers or codes[-1] != 429
     finally:
         object.__setattr__(gateway.settings, "rate_research_burst", 10000)
+        from bookmind.common.kv import get_kv
+
+        get_kv()._buckets.clear()  # don't leave later tests rate-limited
         object.__setattr__(gateway.settings, "rate_research_per_min", 10.0)
 
 
@@ -224,3 +227,35 @@ async def test_internal_token_guards_services(monkeypatch):
         assert (await c.get("/v1/notes")).status_code == 401
         assert (await c.get("/v1/notes", headers={"x-internal-token": "t0ken"})).status_code == 200
         assert (await c.get("/healthz")).status_code == 200
+
+
+async def test_research_workspace_notes_sessions_and_own_words(client):
+    session = "Penalties " + uuid.uuid4().hex[:6]
+    word = "quokka" + uuid.uuid4().hex[:6]
+    hl = "h" + uuid.uuid4().hex[:12]
+    own = "m" + uuid.uuid4().hex[:12]
+    base = {"doc": "bill", "doc_short": "Bill", "page": 11, "chunk_id": "bill-10", "session": session}
+    r1 = await client.put(f"/api/v1/notes/{hl}", json={**base, "mode": "highlight", "selection": "commits an offence", "color": "amber"})
+    r2 = await client.put(
+        f"/api/v1/notes/{own}",
+        json={**base, "mode": "note", "selection": "fine not exceeding", "comment": f"Compare with GDPR fines {word}"},
+    )
+    assert r1.json()["applied"] and r2.json()["applied"]
+    listing = (await client.get("/api/v1/notes")).json()
+    assert {"name": session, "count": 2} in listing["sessions"]
+    saved = {n["id"]: n for n in listing["notes"]}
+    assert saved[hl]["color"] == "amber" and saved[own]["comment"].startswith("Compare")
+    await settle()
+    hits = (await client.get("/api/v1/search", params={"q": word})).json()["notes"]
+    assert [h["id"] for h in hits] == [own] and hits[0]["session"] == session  # your own words are searchable
+    bad = await client.put(f"/api/v1/notes/{hl}", json={**base, "mode": "highlight", "selection": "x", "color": "red;x"})
+    assert bad.status_code == 422
+
+
+async def test_ask_the_documents_answers_with_citations(client):
+    note_id = "a" + uuid.uuid4().hex[:12]
+    question = "Who appoints the Artificial Intelligence Commissioner?"
+    body = research_body(mode="ask", selection=question, save=True, note_id=note_id, session="Governance")
+    data = (await client.post("/api/v1/research", json=body)).json()
+    assert data["source"] == "extractive" and "## What the documents say" in data["answer"]
+    assert data["note"]["mode"] == "ask" and data["note"]["session"] == "Governance"

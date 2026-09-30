@@ -56,7 +56,7 @@ test.describe("research with the local model and the web", () => {
     await open(page);
     await expect(page.locator("#insights .point").first()).toBeVisible();
     await page.locator("#insights .point .keep").first().click();
-    await expect(page.locator("#pageBody .sentence.saved-hl").first()).toBeVisible();
+    await expect(page.locator("#pageBody mark.anchor.hl").first()).toBeVisible();
     const xref = page.locator("#insights .chip-btn").first();
     const clause = (await xref.textContent()).match(/\d+/)[0];
     await xref.click();

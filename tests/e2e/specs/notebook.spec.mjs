@@ -16,7 +16,7 @@ test("research workspace: session, highlight, own note, ask, filter, export", as
 
   await selectSentence(page, 1);
   await page.locator("#btnHighlight").click();
-  await expect(page.locator("#pageBody .sentence.saved-hl").first()).toBeVisible();
+  await expect(page.locator("#pageBody mark.anchor.hl").first()).toBeVisible();
 
   await selectSentence(page, 3);
   await page.locator("#btnNote").click();
@@ -42,7 +42,7 @@ test("research workspace: session, highlight, own note, ask, filter, export", as
   expect(brief).toContain("## Verification checklist");
 
   await page.reload({ waitUntil: "networkidle" });
-  await expect(page.locator("#pageBody .sentence.saved").first()).toBeVisible();
+  await expect(page.locator("#pageBody mark.anchor").first()).toBeVisible();
   await expect.poll(async () => (await (await page.request.get("/api/v1/notes")).json()).sessions.find((s) => s.name === session)?.count).toBe(3);
 });
 

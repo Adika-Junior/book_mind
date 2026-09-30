@@ -596,3 +596,9 @@ input[type="range"] { accent-color: var(--chrome-accent); width: 92px; }
 .nb-tips ol { margin: 0 0 12px; padding-left: 20px; display: grid; gap: 6px; }
 .page-body .landed { animation: landed 1.8s ease; border-radius: 4px; }
 @keyframes landed { 0%, 35% { background: color-mix(in srgb, var(--accent) 30%, transparent); } 100% { background: transparent; } }
+
+/* Exact-word highlights and notes (text-quote anchored). */
+mark.anchor { color: inherit; cursor: pointer; border-radius: 2px; padding: 0.05em 0; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+mark.anchor.hl { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+mark.anchor.note { background: color-mix(in srgb, var(--secondary) 16%, transparent); box-shadow: inset 0 -2px 0 var(--secondary); }
+.sentence.reading mark.anchor { background: transparent; }

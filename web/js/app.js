@@ -6,6 +6,7 @@ import { escapeHtml, renderMD } from "./md.js";
 import { definitions, excerpt, extractiveAnswer, searchNotes, searchPassages, tokenize } from "./search.js";
 import { buildOutline, nextHeading, sectionAt, structure } from "./structure.js";
 import { relatedElsewhere, relatedNotes, worthNoting } from "./insights.js";
+import { captureAnchor, paintAnchors } from "./anchor.js";
 import * as store from "./store.js";
 
 const $ = (id) => document.getElementById(id);
@@ -594,6 +595,7 @@ const onSelection = debounce(() => {
   const text = sel.toString().replace(/\s+/g, " ").trim();
   if (text.length < 3) { hideToolbar(); return; }
   state.selection = text;
+  state.selectionAnchor = captureAnchor($("pageBody"), sel.getRangeAt(0));
   const anchor = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
   const span = anchor && anchor.closest(".sentence");
   state.selectionSentence = span ? Number(span.dataset.si) : 0;
@@ -815,7 +817,7 @@ const toServer = (n) => ({
   doc: n.doc, doc_short: n.doc_short, page: n.page, mode: n.mode, selection: n.selection, answer: n.answer || "",
   status: n.status, model: n.model, source: n.source, related: (n.related || []).slice(0, 20), created_at: n.created_at, updated_at: n.updated_at,
   comment: n.comment || "", session: n.session || "", color: n.color || null, chunk_id: n.chunk_id || null,
-  web: (n.web || []).slice(0, 10),
+  web: (n.web || []).slice(0, 10), anchor: n.anchor || null,
 });
 async function queuePut(note) {
   await store.enqueue({ op: "put", id: note.id, payload: toServer(note) });
@@ -863,7 +865,7 @@ const filedIn = () => (activeSession() ? ` · filed in “${activeSession()}”`
 async function addHighlight() {
   const selection = takeSelection();
   if (!selection) return;
-  const note = newNote("highlight", selection, { color: "accent" });
+  const note = newNote("highlight", selection, { color: "accent", anchor: state.selectionAnchor });
   state.notes.unshift(note);
   await saveNote(note);
   renderNotes();
@@ -874,7 +876,7 @@ async function addHighlight() {
 async function addOwnNote() {
   const selection = takeSelection();
   if (!selection) return;
-  const note = newNote("note", selection);
+  const note = newNote("note", selection, { anchor: state.selectionAnchor });
   state.notes.unshift(note);
   await saveNote(note);
   nb.editing = note.id;
@@ -1122,16 +1124,18 @@ async function removeNote(n) {
   toast("Removed from your notebook.");
 }
 
-/** Saved highlights and notes are shown on the page they came from; tap one to open it. */
+/** Saved highlights and notes are shown on the page they came from; tap one to open it.
+ *  Exact words where the quote can be found (text-quote anchoring); whole sentences otherwise. */
 function paintSavedHighlights() {
   const body = $("pageBody");
   if (!body || !state.doc) return;
   body.querySelectorAll(".saved").forEach((el) => { el.classList.remove("saved", "saved-hl", "saved-note"); delete el.dataset.note; el.removeAttribute("title"); });
   const here = state.notes.filter((n) => (n.mode === "highlight" || n.mode === "note") && n.doc === state.doc && n.page === state.idx + 1);
-  if (!here.length) return;
+  const missed = paintAnchors(body, here);
+  if (!missed.length) return;
   const norm = (t) => t.replace(/\s+/g, " ").trim().toLowerCase();
   const spans = [...body.querySelectorAll(".sentence")];
-  for (const n of here) {
+  for (const n of missed) {
     const sel = norm(n.selection);
     for (const s of spans) {
       const t = norm(s.textContent);
@@ -1429,7 +1433,7 @@ function wire() {
     const term = e.target.closest(".term");
     if (term) { e.preventDefault(); e.stopPropagation(); termPop && termPop.btn === term ? closeTermPop() : openTermPop(term); return; }
     setCurrentBlock(e.target);
-    const saved = e.target.closest(".saved");
+    const saved = e.target.closest("mark.anchor, .saved");
     if (saved && !tts.playing && getSelection().isCollapsed) openNote(saved.dataset.note);
   });
   $("pageBody").addEventListener("pointerover", (e) => { if (!mq.coarse.matches && !tts.playing) setCurrentBlock(e.target); });

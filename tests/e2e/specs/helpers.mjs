@@ -25,3 +25,27 @@ export async function selectSentence(page, i) {
 }
 
 export const unique = (prefix) => `${prefix} ${Math.random().toString(36).slice(2, 7)}`;
+
+/** Select the n-th occurrence (0-based) of `phrase` in the page body, as a reader would. */
+export async function selectPhrase(page, phrase, occurrence = 0) {
+  await page.evaluate(([phrase, occurrence]) => {
+    const body = document.getElementById("pageBody");
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let text = "";
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) { nodes.push([n, text.length]); text += n.nodeValue; }
+    let at = -1;
+    for (let k = 0; k <= occurrence; k++) at = text.indexOf(phrase, at + 1);
+    if (at < 0) throw new Error(`phrase not found: ${phrase}`);
+    const pos = (i) => { const [n, s] = nodes.findLast(([, s]) => s <= i); return [n, i - s]; };
+    const r = document.createRange();
+    r.setStart(...pos(at));
+    r.setEnd(...pos(at + phrase.length));
+    r.startContainer.parentElement.scrollIntoView({ block: "center" }); // readers select what they can see
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+  }, [phrase, occurrence]);
+  await page.waitForTimeout(150); // let the scroll settle before the toolbar is positioned
+  await page.evaluate(() => document.dispatchEvent(new Event("selectionchange")));
+  await page.locator("#selToolbar.show").waitFor();
+}

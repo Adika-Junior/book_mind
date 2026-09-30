@@ -70,10 +70,12 @@ V2_COLUMNS = {
     "color": "TEXT",
     "chunk_id": "TEXT",
     "web": "TEXT DEFAULT '[]'",  # web sources consulted, with the date they were accessed
+    # W3C Web Annotation style text-quote context, so the exact words can be re-found on the page.
+    "anchor": "TEXT",
 }
 FIELDS = [
     "id", "doc", "doc_short", "page", "mode", "selection", "answer", "status", "model", "source", "related",
-    "created_at", "updated_at", "comment", "session", "color", "chunk_id", "web",
+    "created_at", "updated_at", "comment", "session", "color", "chunk_id", "web", "anchor",
 ]
 # research / simplify / ask are answered from the documents; highlight and note are the reader's own.
 NoteMode = Literal["research", "simplify", "ask", "highlight", "note", "web"]
@@ -114,6 +116,10 @@ def row_to_note(row: sqlite3.Row) -> dict:
             note[field] = json.loads(note[field] or "[]")
         except ValueError:
             note[field] = []
+    try:
+        note["anchor"] = json.loads(note["anchor"]) if note["anchor"] else None
+    except ValueError:
+        note["anchor"] = None
     return note
 
 
@@ -138,6 +144,13 @@ class WebRef(BaseModel):
     accessed_at: int | None = None
 
 
+class Anchor(BaseModel):
+    """Text-quote selector context (https://www.w3.org/TR/annotation-model/#text-quote-selector)."""
+
+    prefix: str = Field("", max_length=64)
+    suffix: str = Field("", max_length=64)
+
+
 class NoteIn(BaseModel):
     doc: str = Field(..., max_length=40)
     doc_short: str | None = Field(None, max_length=40)
@@ -156,6 +169,7 @@ class NoteIn(BaseModel):
     color: str | None = Field(None, pattern=r"^[a-z]{1,12}$")
     chunk_id: str | None = Field(None, max_length=64)
     web: list[WebRef] = Field(default_factory=list, max_length=10)
+    anchor: Anchor | None = None
 
 
 def upsert_note(note_id: str, note: NoteIn) -> dict:
@@ -192,6 +206,7 @@ def upsert_note(note_id: str, note: NoteIn) -> dict:
             "color": note.color,
             "chunk_id": note.chunk_id,
             "web": json.dumps([w.model_dump() for w in note.web]),
+            "anchor": json.dumps(note.anchor.model_dump()) if note.anchor else None,
         }
         conn.execute(
             f"INSERT OR REPLACE INTO notes({','.join(FIELDS)}, ts) VALUES ({','.join('?' * len(FIELDS))}, ?)",  # noqa: S608
@@ -199,7 +214,12 @@ def upsert_note(note_id: str, note: NoteIn) -> dict:
         )
         if tomb:
             conn.execute("DELETE FROM tombstones WHERE id=?", (note_id,))
-        payload = {**record, "related": json.loads(record["related"]), "web": json.loads(record["web"])}
+        payload = {
+            **record,
+            "related": json.loads(record["related"]),
+            "web": json.loads(record["web"]),
+            "anchor": json.loads(record["anchor"]) if record["anchor"] else None,
+        }
         _enqueue(conn, "note.upserted", payload)
         conn.commit()  # note + event commit atomically
     NOTES_WRITES.labels("upsert", "applied").inc()

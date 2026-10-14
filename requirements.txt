@@ -1,6 +1,6 @@
 # Runtime dependencies — pinned so CI, containers and laptops run exactly what was tested.
 # Dependabot (.github/dependabot.yml) + pip-audit in CI keep these current and CVE-free.
-fastapi==0.142.1
+fastapi==0.143.0
 starlette==1.7.0
 uvicorn[standard]==0.54.0
 httpx==0.28.1

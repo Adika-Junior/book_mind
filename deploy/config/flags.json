@@ -4,5 +4,6 @@
   "llm_enabled": true,
   "notes_search_enabled": true,
   "web_search_enabled": true,
+  "neural_voices_enabled": true,
   "maintenance_message": ""
 }

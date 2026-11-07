@@ -45,6 +45,7 @@
   <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/></symbol>
   <symbol id="i-ask" viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4z"/><path d="M10 8.5a2 2 0 1 1 2.7 1.9c-.5.2-.7.6-.7 1.1M12 13.2v.1"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/></symbol>
 </svg>
 
@@ -61,12 +62,15 @@
   <button class="iconbtn" id="searchBtn" aria-label="Search the documents and your notes (/)"><svg class="icon"><use href="#i-search"/></svg></button>
   <button class="iconbtn" id="settingsBtn" aria-label="Reading settings: colours, typeface, size and spacing" aria-expanded="false" aria-controls="settingsPanel"><svg class="icon"><use href="#i-type"/></svg></button>
   <button class="iconbtn" id="themeBtn" aria-label="Switch light or dark theme"><svg class="icon"><use id="themeIcon" href="#i-moon"/></svg></button>
+  <button class="iconbtn" id="accountBtn" hidden aria-haspopup="menu" aria-expanded="false" aria-controls="accountMenu" aria-label="Your account"><svg class="icon"><use href="#i-user"/></svg></button>
   <button class="iconbtn labelled" id="notebookBtn" aria-label="Notebook: your highlights, notes and research" aria-expanded="false" aria-controls="notebook"><svg class="icon"><use href="#i-book"/></svg><span class="btn-label">Notebook</span><span class="badge" id="noteCount" hidden></span></button>
 </header>
 
+<section class="status-region" aria-label="Reading status">
 <div class="reading-progress" role="progressbar" aria-label="Progress through this document" aria-valuemin="0" aria-valuemax="100" id="docProgress"><span id="docProgressFill"></span></div>
 <div class="banner" id="updateBanner" hidden role="status"><p>A new version of BookMind is ready.</p><button id="updateBtn" type="button">Reload</button></div>
 <div class="banner info" id="noticeBanner" hidden role="status"><p id="noticeText"></p><button id="noticeClose" type="button" aria-label="Dismiss">OK</button></div>
+</section>
 
 <div class="shell">
   <nav class="nav" id="nav" aria-label="Documents">
@@ -89,10 +93,19 @@
   <div class="scrim nav-scrim" id="navScrim"></div>
 
   <main class="reader" id="reader">
+    <div class="seltoolbar" id="selToolbar" role="toolbar" aria-label="Selection actions">
+  <button type="button" id="btnHighlight"><svg class="icon"><use href="#i-mark"/></svg>Highlight</button>
+  <button type="button" id="btnNote"><svg class="icon"><use href="#i-pen"/></svg>Note</button>
+  <button type="button" id="btnResearch"><svg class="icon"><use href="#i-spark"/></svg>Research</button>
+  <button type="button" id="btnSimplify"><svg class="icon"><use href="#i-bulb"/></svg>Simplify</button>
+  <button type="button" id="btnReadHere"><svg class="icon"><use href="#i-speak"/></svg>Read from here</button>
+</div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <div class="reader-scroll" id="readerScroll">
       <div class="column">
       <article class="page" id="page">
         <header class="page-kicker">
+          <h2 class="sr-only" id="pageHeading"></h2>
           <nav aria-label="You are here"><ol class="crumbs" id="crumbs"><li>Loading…</li></ol></nav>
           <div class="page-meta"><span id="pageNo"></span><span id="timeLeft"></span></div>
         </header>
@@ -158,13 +171,7 @@
   </aside>
 </div>
 
-<div class="seltoolbar" id="selToolbar" role="toolbar" aria-label="Selection actions">
-  <button type="button" id="btnHighlight"><svg class="icon"><use href="#i-mark"/></svg>Highlight</button>
-  <button type="button" id="btnNote"><svg class="icon"><use href="#i-pen"/></svg>Note</button>
-  <button type="button" id="btnResearch"><svg class="icon"><use href="#i-spark"/></svg>Research</button>
-  <button type="button" id="btnSimplify"><svg class="icon"><use href="#i-bulb"/></svg>Simplify</button>
-  <button type="button" id="btnReadHere"><svg class="icon"><use href="#i-speak"/></svg>Read from here</button>
-</div>
+
 
 <footer class="audiobar" aria-label="Read aloud">
   <button class="playbtn" id="playBtn" type="button" aria-label="Read this page aloud"><svg class="icon"><use id="playIcon" href="#i-play"/></svg></button>
@@ -219,6 +226,7 @@
     </fieldset>
     <fieldset>
       <legend>Reading aids</legend>
+      <label class="switch"><input type="checkbox" id="paraNumsToggle"> Show paragraph numbers (¶), so citations like “Bill, p.11 ¶3” are easy to find</label>
       <label class="switch"><input type="checkbox" id="insightsToggle"> Show “Worth noting” (key points, cross-references, related passages) on each page</label>
     </fieldset>
     <fieldset>
@@ -246,7 +254,60 @@
   </div>
 </div>
 
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="menu" id="accountMenu" role="menu" hidden aria-labelledby="accountBtn">
+  <div class="menu-head"><strong id="accountName"></strong><span id="accountRole"></span></div>
+  <button type="button" role="menuitem" id="changePwBtn">Change password</button>
+  <button type="button" role="menuitem" id="manageUsersBtn" hidden>Manage accounts</button>
+  <button type="button" role="menuitem" id="signOutBtn">Sign out</button>
+</div>
+
+<div class="dialog" id="passwordDialog" hidden role="dialog" aria-modal="true" aria-labelledby="passwordTitle">
+  <form class="dialog-card form-card" id="passwordForm" novalidate>
+    <h2 id="passwordTitle">Change your password</h2>
+    <p class="hint" id="passwordIntro">Use at least 10 characters. A short phrase you'll remember works well.</p>
+    <label for="pwCurrent">Current password</label>
+    <input id="pwCurrent" type="password" autocomplete="current-password" required>
+    <label for="pwNew">New password</label>
+    <input id="pwNew" type="password" autocomplete="new-password" minlength="10" required aria-describedby="passwordIntro">
+    <label for="pwRepeat">Repeat new password</label>
+    <input id="pwRepeat" type="password" autocomplete="new-password" required>
+    <p class="form-error" id="passwordError" role="alert" hidden></p>
+    <div class="row"><button type="button" class="btn ghost" id="passwordCancel">Cancel</button><button type="submit" class="btn">Save password</button></div>
+  </form>
+</div>
+
+<div class="dialog" id="usersDialog" hidden role="dialog" aria-modal="true" aria-labelledby="usersTitle">
+  <div class="dialog-card form-card wide">
+    <div class="row head"><h2 id="usersTitle">Accounts</h2><button class="iconbtn" id="usersClose" type="button" aria-label="Close accounts"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <p class="hint">Everyone has a private notebook. New accounts get a one-time password to share with the person; they choose their own when they first sign in.</p>
+    <form class="add-user" id="addUserForm" novalidate>
+      <div><label for="newUsername">Username</label><input id="newUsername" autocomplete="off" autocapitalize="none" spellcheck="false" pattern="[a-z0-9][a-z0-9._\-]{1,31}" required aria-describedby="usernameHint"></div>
+      <div><label for="newDisplay">Name</label><input id="newDisplay" autocomplete="off" maxlength="80"></div>
+      <div><label for="newRole">Role</label><select id="newRole"><option value="reader">Reader</option><option value="admin">Administrator</option></select></div>
+      <button class="btn" type="submit">Add account</button>
+      <p class="hint" id="usernameHint">Lowercase letters, numbers, dots, dashes; 2–32 characters.</p>
+    </form>
+    <p class="form-error" id="usersError" role="alert" hidden></p>
+    <div class="temp-pw" id="tempPw" hidden role="status"></div>
+    <div class="users-list" id="usersList" aria-live="polite"></div>
+  </div>
+</div>
+
+<div class="login" id="login" hidden>
+  <form class="card" id="loginForm" novalidate>
+    <img src="/icons/icon.svg" alt="" width="56" height="56">
+    <h2>Sign in to BookMind</h2>
+    <p class="hint">Your notebook is private to your account.</p>
+    <label for="loginUser">Username</label>
+    <input id="loginUser" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    <label for="loginPass">Password</label>
+    <input id="loginPass" type="password" autocomplete="current-password" required>
+    <p class="form-error" id="loginError" role="alert" hidden></p>
+    <button class="btn" type="submit" id="loginSubmit">Sign in</button>
+    <p class="hint small">Forgot your password? Ask your BookMind administrator to reset it.</p>
+  </form>
+</div>
+
 <div class="boot" id="boot" hidden><div class="card"><h2>Couldn’t open the book</h2><p id="bootMsg"></p><button class="btn" id="bootRetry" type="button">Try again</button></div></div>
 
 </body>

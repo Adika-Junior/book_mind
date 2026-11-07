@@ -13,15 +13,23 @@ IMAGE = "ghcr.io/OWNER/bookmind:2.0.0"  # set by CI (kustomize edit set image) â
 
 SERVICES = {
     #          replicas, min/max HPA,  cpu req, mem limit, extra env
-    "gateway":  dict(replicas=2, hpa=(2, 10), cpu="100m", mem="256Mi", env={"BOOKMIND_TRUST_PROXY": "true"}),
+    "gateway":  dict(replicas=2, hpa=(2, 10), cpu="100m", mem="256Mi", env={"BOOKMIND_TRUST_PROXY": "true", "BOOKMIND_AUTH_MODE": "accounts"}),
     "catalog":  dict(replicas=2, hpa=None, cpu="50m", mem="256Mi", env={}),
-    "search":   dict(replicas=2, hpa=(2, 8), cpu="100m", mem="384Mi", env={}),
+    # search holds the static embedding table (~35 MB) for meaning search.
+    "search":   dict(replicas=2, hpa=(2, 8), cpu="100m", mem="512Mi", env={}),
     "research": dict(replicas=2, hpa=(2, 6), cpu="100m", mem="256Mi", env={
         "BOOKMIND_OLLAMA_URL": "http://ollama:11434/api/chat",
         "BOOKMIND_OLLAMA_MODEL": "llama3.2",
         "BOOKMIND_OLLAMA_TIMEOUT_S": "120",
         "BOOKMIND_MAX_CONCURRENT_GENERATIONS": "2"}),
     "websearch": dict(replicas=2, hpa=None, cpu="50m", mem="192Mi", env={}),
+    # Piper read-aloud. Voice models (read-only files) live on a volume filled by tools/voices.py â€”
+    # see docs/VOICES.md. One replica because the volume is ReadWriteOnce; with a ReadOnlyMany /
+    # RWX storage class, raise replicas and add an HPA (synthesis is CPU-bound and stateless).
+    "tts": dict(replicas=1, hpa=None, pdb=False, cpu="250m", mem="768Mi",
+                env={"BOOKMIND_VOICES_DIR": "/app/var/voices", "BOOKMIND_TTS_CONCURRENCY": "2"},
+                mounts=[{"name": "voices", "mountPath": "/app/var/voices", "readOnly": True}],
+                volumes=[{"name": "voices", "persistentVolumeClaim": {"claimName": "bookmind-voices", "readOnly": True}}]),
 }
 
 
@@ -41,7 +49,7 @@ def container(name, extra_env, cpu, mem, volume_mounts=()):
         {"name": "BOOKMIND_INTERNAL_TOKEN_FILE", "value": "/run/secrets/bookmind/internal_token"},
         {"name": "BOOKMIND_REDIS_PASSWORD_FILE", "value": "/run/secrets/bookmind/redis_password"},
     ]
-    if name == "gateway":
+    if name == "accounts":  # creates the first admin from this, once
         env.append({"name": "BOOKMIND_AUTH_PASSWORD_FILE", "value": "/run/secrets/bookmind/auth_password"})
     return {
         "name": name,
@@ -111,12 +119,13 @@ for name, cfg in SERVICES.items():
             "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1}},
             "template": {
                 "metadata": {"labels": labels(name), "annotations": {"prometheus.io/scrape": "true", "prometheus.io/port": "8000"}},
-                "spec": pod_spec(container(name, cfg["env"], cfg["cpu"], cfg["mem"])),
+                "spec": pod_spec(container(name, cfg["env"], cfg["cpu"], cfg["mem"], cfg.get("mounts", ())), cfg.get("volumes", ())),
             },
         },
     })
     docs.append(service(name))
-    docs.append(pdb(name))
+    if cfg.get("pdb", True):
+        docs.append(pdb(name))
     if cfg["hpa"]:
         lo, hi = cfg["hpa"]
         docs.append({
@@ -127,20 +136,29 @@ for name, cfg in SERVICES.items():
                      "behavior": {"scaleDown": {"stabilizationWindowSeconds": 300}}},
         })
 
-# notebook: SQLite has exactly one writer -> a single-replica StatefulSet with its own volume.
-nb = container("notebook", {}, "50m", "256Mi", [{"name": "data", "mountPath": "/app/var"}])
+# notebook and accounts: SQLite has exactly one writer -> single-replica StatefulSets with a volume each.
+def stateful(name, mem, env=None, storage="1Gi"):
+    c = container(name, env or {}, "50m", mem, [{"name": "data", "mountPath": "/app/var"}])
+    docs.append({
+        "apiVersion": "apps/v1", "kind": "StatefulSet", "metadata": {"name": name, "namespace": NS, "labels": labels(name)},
+        "spec": {
+            "serviceName": name, "replicas": 1,
+            "selector": {"matchLabels": {"app.kubernetes.io/name": name}},
+            "template": {"metadata": {"labels": labels(name), "annotations": {"prometheus.io/scrape": "true", "prometheus.io/port": "8000"}},
+                         "spec": pod_spec(c)},
+            "volumeClaimTemplates": [{"metadata": {"name": "data"},
+                                      "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": storage}}}}],
+        },
+    })
+    docs.append(service(name))
+
+
+stateful("notebook", "256Mi")
+stateful("accounts", "192Mi", {"BOOKMIND_ACCOUNTS_DB_PATH": "/app/var/accounts.db"}, storage="256Mi")
 docs.append({
-    "apiVersion": "apps/v1", "kind": "StatefulSet", "metadata": {"name": "notebook", "namespace": NS, "labels": labels("notebook")},
-    "spec": {
-        "serviceName": "notebook", "replicas": 1,
-        "selector": {"matchLabels": {"app.kubernetes.io/name": "notebook"}},
-        "template": {"metadata": {"labels": labels("notebook"), "annotations": {"prometheus.io/scrape": "true", "prometheus.io/port": "8000"}},
-                     "spec": pod_spec(nb)},
-        "volumeClaimTemplates": [{"metadata": {"name": "data"},
-                                  "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}}}],
-    },
+    "apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "bookmind-voices", "namespace": NS, "labels": labels("tts")},
+    "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "2Gi"}}},
 })
-docs.append(service("notebook"))
 dump("services", docs)
 
 # ------------------------------------------------------------------ stateful infrastructure
@@ -218,12 +236,16 @@ otlp = {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.na
 
 dump("networkpolicies", [
     policy("default-deny", None, ingress_from=[], egress_to=[]),
-    policy("gateway", "gateway", [ingress_ctrl, scrape], [dns, otlp, to_pods("catalog", "search", "research", "notebook", "websearch"), to_pods("redis", port=6379)]),
+    policy("gateway", "gateway", [ingress_ctrl, scrape], [dns, otlp, to_pods("catalog", "search", "research", "notebook", "websearch", "tts", "accounts"), to_pods("redis", port=6379)]),
     policy("catalog", "catalog", [from_pods("gateway", "search", "research"), scrape], [dns, otlp]),
     policy("search", "search", [from_pods("gateway", "research"), scrape], [dns, otlp, to_pods("catalog", "notebook"), to_pods("redis", port=6379)]),
     policy("research", "research", [from_pods("gateway"), scrape], [dns, otlp, to_pods("search", "catalog", "websearch"), to_pods("redis", port=6379), to_pods("ollama", port=11434)]),
     # The only app service allowed out to the internet (search providers over HTTPS / SearXNG).
     policy("websearch", "websearch", [from_pods("gateway", "research"), scrape], [dns, otlp, to_pods("redis", port=6379), {"ports": [{"port": 443}, {"port": 8080}]}]),
+    # Read-aloud: synthesises locally, needs nobody and nothing outside the pod.
+    policy("tts", "tts", [from_pods("gateway"), scrape], [dns, otlp]),
+    # Accounts: only the gateway may ask who someone is; it needs nothing outside the pod.
+    policy("accounts", "accounts", [from_pods("gateway"), scrape], [dns, otlp]),
     policy("notebook", "notebook", [from_pods("gateway", "search"), scrape], [dns, otlp, to_pods("redis", port=6379)]),
     policy("redis", "redis", [from_pods("gateway", "search", "research", "notebook", "websearch", port=6379)], []),
     # Ollama may reach the internet (to pull weights) but only research may reach Ollama.

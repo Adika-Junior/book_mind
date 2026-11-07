@@ -10,7 +10,8 @@ gen grafana_password.txt
 gen searxng_secret.txt
 chmod 644 ./*.txt  # containers run as non-root UIDs and must read these bind-mounted files
 chmod 700 .   # the directory is the access boundary on the host
-echo "Login user: bookmind   password: $(cat auth_password.txt)"
+echo "First administrator: bookmind   password: $(cat auth_password.txt)"
+echo "Sign in, then add people under the account menu (top right) → Manage accounts."
 
 # (tls.key and the .txt files are 0644 because the containers run as non-root UIDs; the 0700 secrets/
 # directory keeps other host users out.)

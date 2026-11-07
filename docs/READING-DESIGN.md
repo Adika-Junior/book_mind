@@ -58,7 +58,7 @@ The notebook supports that loop without leaving the page.
 
 | Feature | Why |
 |---|---|
-| **Highlight** and **Note** straight from a selection; highlights shown back on the page | Keeping your own marks where they were made supports re-finding and review. It also makes readers select what matters, rather than saving everything. |
+| **Highlight** and **Note** straight from a selection; highlights shown back on the page, on the *exact words* selected (anchored with a [W3C text-quote selector](https://www.w3.org/TR/annotation-model/#text-quote-selector): the quote plus a little context, so repeated phrases resolve to the right one) | Keeping your own marks where they were made supports re-finding and review. It also makes readers select what matters, rather than saving everything. |
 | **Your note** on any item, including AI answers | Writing in your own words (elaboration) is how understanding sticks; the answer alone is not the goal. |
 | **Ask the documents** with page citations | Turns a question into evidence you can check. Answers say where they came from, and fall back to quoted passages when the model is unavailable. |
 | **Research sessions** (one per topic) and **Export brief** | Segmenting a large task into topics (Mayer's segmenting principle), and ending with a tangible output that has references. |

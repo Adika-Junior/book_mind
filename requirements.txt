@@ -9,3 +9,7 @@ python-dotenv==1.2.3
 rank-bm25==0.2.2
 redis==8.1.0
 prometheus-client==0.26.0
+# Meaning search: static embedding model; weights + tokenizer ship inside the wheel (MIT).
+wordllama==0.4.0.post1
+# Read-aloud: Piper neural TTS (GPL-3.0-or-later, compatible with BookMind's AGPL-3.0-or-later).
+piper-tts==1.8.0

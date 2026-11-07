@@ -78,6 +78,10 @@ class Settings:
     db_path: Path = field(
         default_factory=lambda: Path(env("BOOKMIND_DB_PATH", str(ROOT_DIR / "data" / "notebook.db")))
     )
+    accounts_db_path: Path = field(
+        default_factory=lambda: Path(env("BOOKMIND_ACCOUNTS_DB_PATH", str(ROOT_DIR / "data" / "accounts.db")))
+    )
+    session_days: int = field(default_factory=lambda: env_int("BOOKMIND_SESSION_DAYS", 30))
     web_dir: Path = field(default_factory=lambda: Path(env("BOOKMIND_WEB_DIR", str(ROOT_DIR / "web"))))
     flags_path: Path = field(
         default_factory=lambda: Path(
@@ -116,6 +120,19 @@ class Settings:
     )
     rate_research_burst: int = field(default_factory=lambda: env_int("BOOKMIND_RATE_RESEARCH_BURST", 5))
 
+    # Semantic search (bookmind/common/embed.py). "auto" = the bundled static model if installed.
+    embedder: str = field(default_factory=lambda: env("BOOKMIND_EMBEDDER", "auto"))
+    embed_url: str = field(default_factory=lambda: env("BOOKMIND_EMBED_URL", "http://localhost:11434/api/embed"))
+    embed_model: str = field(default_factory=lambda: env("BOOKMIND_EMBED_MODEL", "nomic-embed-text"))
+    semantic_weight: float = field(default_factory=lambda: env_float("BOOKMIND_SEMANTIC_WEIGHT", 0.7))
+
+    # Read-aloud with Piper neural voices (bookmind/services/tts.py).
+    voices_dir: Path = field(
+        default_factory=lambda: Path(env("BOOKMIND_VOICES_DIR", str(ROOT_DIR / "data" / "voices")))
+    )
+    tts_max_chars: int = field(default_factory=lambda: env_int("BOOKMIND_TTS_MAX_CHARS", 600))
+    tts_concurrency: int = field(default_factory=lambda: env_int("BOOKMIND_TTS_CONCURRENCY", 2))
+
     # Telemetry.
     otlp_endpoint: str | None = field(default_factory=lambda: env("OTEL_EXPORTER_OTLP_ENDPOINT"))
 
@@ -123,6 +140,24 @@ class Settings:
     def auth_password(self) -> str | None:
         # A property, not a field: re-read on each request so a rotated secret file applies live.
         return secret("BOOKMIND_AUTH_PASSWORD")
+
+    @property
+    def auth_mode(self) -> str:
+        """"accounts": people sign in and each has a private notebook. "none": no sign-in, one
+        notebook (a personal laptop). "auto" (default) = accounts once an admin password is set.
+        Read per call, like the password, so it follows the deployment's secrets."""
+        mode = (env("BOOKMIND_AUTH_MODE", "auto") or "auto").lower()
+        if mode == "auto":
+            return "accounts" if self.auth_password else "none"
+        if mode not in ("accounts", "none"):
+            raise ValueError(f"BOOKMIND_AUTH_MODE must be auto, accounts or none, not {mode!r}")
+        return mode
+
+    @property
+    def local_owner(self) -> str:
+        """Owner of every note in "none" mode — the bootstrap admin's name, so turning accounts on
+        later hands the existing notebook to that admin."""
+        return (self.auth_user or "bookmind").strip().lower()
 
     @property
     def internal_token(self) -> str | None:
@@ -140,6 +175,7 @@ DEFAULT_FLAGS: dict[str, object] = {
     "llm_enabled": True,  # kill switch: false => extractive answers only, never call the model
     "notes_search_enabled": True,  # include your notebook in search results
     "web_search_enabled": True,  # allow opt-in web search (each device still has to opt in)
+    "neural_voices_enabled": True,  # offer the server's Piper voices for read-aloud
     "maintenance_message": "",  # shown as a banner in every client when non-empty
 }
 

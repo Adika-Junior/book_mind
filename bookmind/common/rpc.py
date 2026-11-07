@@ -126,8 +126,10 @@ class ServiceClient:
         headers: dict | None = None,
         timeout_s: float | None = None,
         retries: int | None = None,
+        raw: bool = False,
     ) -> Any:
-        """Call the service and return decoded JSON. GET/PUT/DELETE retry by default (idempotent)."""
+        """Call the service and return decoded JSON — or, with raw=True, (bytes, content-type) for
+        binary payloads such as audio. GET/PUT/DELETE retry by default (idempotent)."""
         if retries is None:
             retries = 3 if method.upper() in {"GET", "HEAD", "PUT", "DELETE"} else 1
         hdrs = {**outgoing_trace_headers(), **(headers or {})}
@@ -154,6 +156,8 @@ class ServiceClient:
                     except ValueError:
                         detail = resp.text
                     raise ClientError(self.name, resp.status_code, detail)
+                if raw:
+                    return resp.content, resp.headers.get("content-type", "application/octet-stream")
                 return resp.json() if resp.content else None
 
             return await breaker.call(send, is_failure=lambda e: isinstance(e, UpstreamError))

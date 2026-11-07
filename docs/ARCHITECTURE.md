@@ -20,7 +20,8 @@ history) are in [`rag-digital-book-architecture.md`](rag-digital-book-architectu
 
 ```
                          ┌──────────── browser / installed PWA (offline-first) ────────────┐
-                         │ service worker cache · IndexedDB notes + outbox · JS BM25 search │
+                         │ SW cache · IndexedDB notes + outbox (Background Sync) · hybrid   │
+                         │ search (BM25 + meaning vectors) · cached voice audio             │
                          └──────────────────────────────┬───────────────────────────────────┘
                                           HTTPS / HTTP2 │  (optional CDN → WAF in front)
                                     ┌───────────────────▼───────────────────┐
@@ -56,6 +57,8 @@ history) are in [`rag-digital-book-architecture.md`](rag-digital-book-architectu
 | research | nothing (cache in Redis) | horizontally; model is the bottleneck | `bookmind/services/research.py` |
 | notebook | notes (SQLite), outbox | **one writer** (see §4 for the Postgres path) | `bookmind/services/notebook.py` |
 | websearch | nothing (cache in Redis); the **only** app service with internet egress | horizontally | `bookmind/services/websearch.py` |
+| tts | nothing (voice files on a read-only volume, audio LRU in memory); no egress at all | horizontally on RWX/ROX storage; CPU-bound | `bookmind/services/tts.py` |
+| accounts | users, password hashes, roles (SQLite) | **one writer**; called only by the gateway | `bookmind/services/accounts.py` |
 
 The same code runs in three shapes:
 
@@ -165,6 +168,39 @@ broker-neutral.
 
 ---
 
+## 7b. Identity: accounts, sessions and private notebooks
+
+- **Modes.** `BOOKMIND_AUTH_MODE=accounts` (default once an admin password is configured): people
+  sign in and every notebook is private. `none` (default without a password): no sign-in, one
+  notebook owned by the local user — the laptop/Raspberry Pi mode.
+- **accounts service** owns the user table: scrypt hashes with per-user salt and stored parameters
+  (upgraded on sign-in), NIST SP 800-63B password rules (≥10 chars, no composition rules, refuse
+  common passwords and the username), constant-work checks for unknown users, 10 failures → 15-min
+  lock, at least one active admin always, an `epoch` per user that changes on disable / reset /
+  role change / password change.
+- **Gateway** (`bookmind/services/auth.py`) verifies sign-ins with the accounts service and keeps
+  sessions in the shared KV (Redis): only a SHA-256 of the token is stored; the browser holds the
+  token in an `HttpOnly; SameSite=Lax; Secure` cookie. 30-day sliding expiry. A session dies when
+  its user's epoch moves (checked per request), so disabling someone signs them out everywhere.
+  Login is rate-limited per address. Unsafe API calls require `X-BookMind: 1` (CSRF: browsers
+  can't add custom headers cross-site without a preflight the gateway refuses). Basic auth stays
+  for scripts (cached 5 min, since scrypt is deliberately slow). No `WWW-Authenticate` header, so
+  browsers never show their own login box.
+- **Ownership.** The gateway passes the authenticated username to the notebook in
+  `x-bookmind-user` (internal network + internal token only). Notes and tombstones are keyed by
+  `(owner, id)`; every query filters by owner; idempotency keys are scoped per owner; events carry
+  the owner and the search read model is keyed and queried by owner. Deleting an account erases its
+  notes (each deletion is published, so the read model forgets them too). Existing databases are
+  migrated in place: notes from before accounts belong to `BOOKMIND_AUTH_USER`.
+- **Devices.** One IndexedDB per account (`bookmind-<username>`); personal preferences (position,
+  sessions, web consent) are namespaced per account, device ones (theme, voice) are shared. Every
+  queued change records its owner and is replayed with `X-BookMind-User`; if a different person is
+  signed in the gateway answers 409 and the change waits for its owner. The service worker syncs
+  only the active account (recorded in a small `bookmind-meta` database). A sign-out made offline is
+  remembered and sent to the server before anyone can sign in again on that device.
+- Tested in-process (`tests/test_accounts.py`), as separate processes over HTTP, and in the
+  browser against a second server with accounts on (`tests/e2e/specs/accounts.spec.mjs`).
+
 ## 8. Offline-first client (the "works offline, on every device" requirement)
 
 - **Installable PWA**: manifest, maskable icons, standalone display, app shortcut.
@@ -174,7 +210,50 @@ broker-neutral.
 - **Local-first notes**: IndexedDB is the source of truth on the device; an outbox replays
   changes with idempotency keys, and sync is last-writer-wins with tombstones. Storage
   persistence is requested so the browser doesn't evict it.
-- **Offline intelligence**: JS BM25 search over all 260 pages, and offline "Research/Simplify"
+- **Sync after the app is closed**: `web/js/sync-core.js` is the one outbox-replay
+  implementation, loaded by the page (`net.js`) and by the service worker (`importScripts`).
+  1. *Background Sync* (Chromium): saving a note offline registers `bookmind-sync`; when the
+     network returns the browser wakes the worker — no tab needed — and it replays the IndexedDB
+     outbox itself. A rejected promise makes the browser retry with backoff.
+  2. *Periodic Background Sync* (installed Chromium PWAs): `bookmind-refresh` occasionally pushes
+     leftovers and pulls other devices' notes, so the notebook is current when next opened.
+  3. *keepalive flush* (every browser, incl. Firefox/Safari): on `pagehide`/hidden the page hands
+     queued changes to `fetch(…, {keepalive: true})`, which outlives the page (64 KiB budget).
+  4. Next open: the page replays whatever is still queued.
+  All four use the same Idempotency-Keys (`put-<id>-<updated_at>`), so overlapping deliveries are
+  answered from the idempotency store (a concurrent duplicate gets 409 and retries), and a Web
+  Lock stops a tab and the worker replaying at the same time. Tested end-to-end by closing the
+  page and dispatching the sync events (`tests/e2e/specs/background-sync.spec.mjs`).
+- **Search by meaning**: the search service embeds every page as ~60-word overlapping windows
+  with a static embedding model (WordLlama `l2_supercat`, MIT, weights bundled in the wheel — no
+  download, CPU-only, ~0.3 s to embed the corpus) or, optionally, an Ollama embedding model
+  (`BOOKMIND_EMBEDDER=ollama`, `nomic-embed-text`). A page scores by its best window; scores are
+  fused 0.7 × meaning (min-max) + 0.3 × BM25 (max-normalised); tables of contents get a 0.8
+  prior (they match everything and help least). Nonsense is kept out by a similarity floor and
+  a "real words" gate (keyboard mash tokenises into 1–2-character pieces). On a hand-labelled
+  set (`tests/test_semantic.py`) paraphrased questions hit the right page in the top 3 in 6/10
+  cases vs 3/10 for BM25; exact-term queries hold at 5/6 (BM25: 6/6) — a small set, a guard
+  against regressions rather than a benchmark. Results found by meaning alone are labelled
+  "Similar meaning" in the UI.
+  **Offline**, the same model runs in the browser: the "semantic pack" (`/api/v1/semantic`,
+  ~2.8 MB, stale-while-revalidate in the service worker) carries 64-dim int8 token vectors and
+  window vectors; `search.js` tokenises greedily against the vocabulary and averages — the same
+  arithmetic as the server (parity-tested against it).
+- **Natural read-aloud**: `tts` runs Piper voices (see [VOICES.md](VOICES.md)); the page fetches
+  one sentence of WAV at a time with the next prefetched, and falls back per sentence to the Web
+  Speech API. Audio responses are immutable, so the service worker caches them (600 sentences,
+  oldest evicted) and listened pages replay offline.
+- **Paragraph-level citations**: answers cite `[Doc, p.N ¶M]`. A paragraph is a body block
+  (paragraph, clause/list item, contents listing) as the reader renders it, numbered from 1 per
+  page. `web/js/structure.js` cuts pages in the browser and `bookmind/common/structure.py` is a
+  rule-for-rule port so the server numbers identically; `tests/test_structure_parity.py` compares
+  both on all 260 pages. The model is given passages already labelled `[Bill, p.11 ¶3] text` and
+  told to copy labels (tested: every label names the paragraph that follows it); extractive and
+  offline answers cut sentences per paragraph, so each quote has exactly one paragraph. The client
+  renders citations as links that land on the paragraph, fills in a missing ¶ only when the claim
+  clearly matches one paragraph, marks citations to pages that don't exist, and lists "Sources"
+  with the cited words under every answer. Exported briefs list every cited paragraph with a quote.
+- **Offline intelligence**: JS hybrid search over all 260 pages, and offline "Research/Simplify"
   that returns the Bill's own definitions plus cited best-matching sentences. It uses the same
   logic as the server's fallback.
 - **Every device**: mobile-first layout from 320 px phones to wide desktops. Drawers become
@@ -217,4 +296,5 @@ broker-neutral.
 | Search doesn't show a new note | `GET notebook /v1/outbox` backlog; search logs | Backlog > 0 means the broker is unreachable (the relay retries). Restarting a search replica rebuilds its projection from snapshot + stream. |
 | Need to switch the model off now | — | `HSET bm:flags llm_enabled false` (all replicas, ≤2 s), or edit `flags.json`. |
 | Rotate the login password | — | Overwrite `secrets/auth_password.txt` (or the Vault key). The next request uses it; no restart. |
+| `BookMindServiceMissing` | `docker compose ps` / `kubectl -n bookmind get pods` | A service has no running instance. Start or roll back that service; readers keep the cached book meanwhile (stale-on-error). |
 | Roll back a release | `kubectl -n bookmind rollout history deploy/gateway` | `kubectl -n bookmind rollout undo deploy/<name>`. |

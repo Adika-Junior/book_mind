@@ -29,7 +29,7 @@ const XREF = /\b(section|clause|article)\s+(\d{1,3}[A-Z]?)(\(\d+\))?/gi;
 export function worthNoting(body, docId) {
   const scored = [];
   for (const span of body.querySelectorAll(".sentence")) {
-    if (span.closest("h2, h3")) continue; // headings are already signposts
+    if (span.closest("h2, h3, h4")) continue; // headings are already signposts
     const text = span.textContent.replace(/\s+/g, " ").trim();
     if (text.length < 40 || text.length > 600) continue;
     const kinds = KINDS.filter((k) => k.re.test(text));

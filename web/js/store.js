@@ -2,14 +2,78 @@
 // Local-first storage. Notes live in IndexedDB on the device (the source of truth while offline);
 // pending server changes wait in an "outbox" store — the client-side twin of the server's
 // transactional outbox — and are replayed with Idempotency-Keys when the network returns.
+//
+// Each account gets its own database ("bookmind-<username>"), so two people sharing a device never
+// see each other's notes, and changes queued by one are never sent while the other is signed in.
 
-const DB_NAME = "bookmind";
 const DB_VERSION = 1;
+const LEGACY_DB = "bookmind"; // before accounts: one database per device
+let DB_NAME = null;
+let ACCOUNT = null;
 let dbPromise = null;
 let memoryFallback = null; // private mode / storage blocked: keep working, just not durably
 
+export const dbNameFor = (username) => `bookmind-${username}`;
+export const account = () => ACCOUNT;
+
+/** Point storage at one account's database; records it for the service worker's background sync. */
+export async function useAccount(username, { legacyOwner = null } = {}) {
+  if (dbPromise) { try { (await dbPromise).close(); } catch { /* never opened */ } }
+  dbPromise = null;
+  memoryFallback = null;
+  ACCOUNT = username;
+  DB_NAME = dbNameFor(username);
+  if (legacyOwner && username === legacyOwner) await adoptLegacyDatabase();
+  await setActiveAccount(username);
+}
+
+/** The notebook from before accounts existed belongs to the local user / first admin: move it over once. */
+async function adoptLegacyDatabase() {
+  try {
+    if (!indexedDB.databases || !(await indexedDB.databases()).some((d) => d.name === LEGACY_DB)) return;
+    const legacy = await new Promise((resolve, reject) => { const r = indexedDB.open(LEGACY_DB); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+    const read = (name) => legacy.objectStoreNames.contains(name)
+      ? new Promise((resolve) => { const r = legacy.transaction(name).objectStore(name).getAll(); r.onsuccess = () => resolve(r.result || []); r.onerror = () => resolve([]); })
+      : Promise.resolve([]);
+    const [notes, ops] = [await read("notes"), await read("outbox")];
+    legacy.close();
+    for (const n of notes) await putNote(n);
+    for (const op of ops.sort((a, b) => a.seq - b.seq)) { const { seq, ...rest } = op; await tx("outbox", "readwrite", (s) => { s.put(rest); }); }
+    indexedDB.deleteDatabase(LEGACY_DB);
+  } catch { /* nothing to adopt */ }
+}
+
+/** Which account the device is signed in as — read by the service worker (it can't see localStorage). */
+async function setActiveAccount(username) {
+  try {
+    const db = await new Promise((resolve, reject) => {
+      const r = indexedDB.open("bookmind-meta", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    await new Promise((resolve) => {
+      const t = db.transaction("kv", "readwrite");
+      if (username) t.objectStore("kv").put(username, "active"); else t.objectStore("kv").delete("active");
+      t.oncomplete = t.onerror = () => resolve();
+    });
+    db.close();
+  } catch { /* storage blocked: background sync just waits for the app */ }
+}
+
+/** Signed out: nothing syncs in the background until someone signs in again. Queued changes stay
+ *  in that person's database and are sent the next time they sign in on this device. */
+export async function signOutDevice() {
+  if (dbPromise) { try { (await dbPromise).close(); } catch { /* ignore */ } }
+  dbPromise = null;
+  ACCOUNT = null;
+  DB_NAME = null;
+  await setActiveAccount(null);
+}
+
 function open() {
   if (dbPromise) return dbPromise;
+  if (!DB_NAME) return Promise.reject(new Error("No account selected"));
   dbPromise = new Promise((resolve, reject) => {
     if (!("indexedDB" in self)) { reject(new Error("IndexedDB unavailable")); return; }
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -95,7 +159,7 @@ export async function enqueue(op) {
   const pending = await outbox();
   return tx("outbox", "readwrite", (s) => {
     for (const p of pending) if (p.id === op.id) s.delete(p.seq);
-    s.put({ ...op, queued_at: Date.now() });
+    s.put({ ...op, owner: ACCOUNT, queued_at: Date.now() }); // replayed only as this account
   });
 }
 
@@ -103,13 +167,30 @@ export async function dequeue(seq) {
   return tx("outbox", "readwrite", (s) => { s.delete(seq); });
 }
 
-// Small synchronous preferences (theme, voice, position) stay in localStorage.
+// Small synchronous preferences stay in localStorage. Device settings (theme, voice, speed) are
+// shared by everyone using the device; personal ones (where you were reading, your research
+// sessions, your web-search consent) are kept per account.
+const PERSONAL = new Set(["pos", "docpos", "progress", "session", "sessions", "web_ok", "web_research"]);
+const prefKey = (key) => (PERSONAL.has(key) && ACCOUNT ? `bm_u:${ACCOUNT}:${key}` : "bm_" + key);
 export const prefs = {
   get(key, fallback = null) {
-    try { const v = localStorage.getItem("bm_" + key); return v === null ? fallback : JSON.parse(v); } catch { return fallback; }
+    try { const v = localStorage.getItem(prefKey(key)); return v === null ? fallback : JSON.parse(v); } catch { return fallback; }
   },
   set(key, value) {
-    try { localStorage.setItem("bm_" + key, JSON.stringify(value)); } catch { /* storage full or blocked */ }
+    try { localStorage.setItem(prefKey(key), JSON.stringify(value)); } catch { /* storage full or blocked */ }
+  },
+  remove(key) {
+    try { localStorage.removeItem(prefKey(key)); } catch { /* ignore */ }
+  },
+  /** First sign-in of the pre-accounts owner: their old personal settings become theirs. */
+  adoptLegacy() {
+    try {
+      for (const key of PERSONAL) {
+        const old = localStorage.getItem("bm_" + key);
+        if (old !== null && localStorage.getItem(prefKey(key)) === null) localStorage.setItem(prefKey(key), old);
+        localStorage.removeItem("bm_" + key);
+      }
+    } catch { /* ignore */ }
   },
 };
 

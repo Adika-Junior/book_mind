@@ -1,6 +1,7 @@
 # Optional: distributed trace export (enabled when OTEL_EXPORTER_OTLP_ENDPOINT is set).
-opentelemetry-sdk==1.45.0
-opentelemetry-exporter-otlp-proto-http==1.45.0
-opentelemetry-instrumentation-fastapi==0.66b0
-opentelemetry-instrumentation-httpx==0.66b0
+opentelemetry-api==1.45.1  # CVE-2026-114603: pinned explicitly so the fix is guaranteed
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.1
+opentelemetry-instrumentation-fastapi==0.66b1
+opentelemetry-instrumentation-httpx==0.66b1
 protobuf==7.36.2

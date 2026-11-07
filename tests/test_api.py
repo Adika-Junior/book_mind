@@ -60,10 +60,13 @@ async def test_book_etag_revalidation(client):
 
 
 async def test_search_aggregates_passages(client):
-    r = await client.get("/api/v1/search", params={"q": "high-risk artificial intelligence"})
+    r = await client.get("/api/v1/search", params={"q": "high-risk artificial intelligence", "mode": "keyword"})
     data = r.json()
     assert data["passages"][0]["id"] == "bill-8"
     assert data["partial"] is False
+    # Hybrid (the default) blends in meaning; the clause stays near the top, the contents page doesn't lead.
+    hybrid = (await client.get("/api/v1/search", params={"q": "high-risk artificial intelligence"})).json()["passages"]
+    assert "bill-8" in [p["id"] for p in hybrid[:3]] and hybrid[0]["id"] != "bill-0"
 
 
 async def test_research_degrades_to_extractive_when_model_down(client):
@@ -164,8 +167,9 @@ async def test_legacy_v1_database_is_migrated(tmp_dir, monkeypatch):
     object.__setattr__(config.get_settings(), "db_path", legacy)
     try:
         notebook.migrate()
-        rows = notebook.list_notes(include_deleted=False, limit=10)["notes"]
+        rows = notebook.list_notes(owner=config.get_settings().local_owner, include_deleted=False, limit=10)["notes"]
         assert rows[0]["id"] == "old1" and rows[0]["updated_at"] == 1700000000000 and rows[0]["status"] == "done"
+        assert rows[0]["owner"] == "bookmind"  # pre-accounts notes go to the first admin / local user
     finally:
         object.__setattr__(config.get_settings(), "db_path", tmp_dir / "notebook.db")
 
@@ -210,12 +214,15 @@ async def test_rate_limit_returns_429(client, monkeypatch):
 
 
 async def test_basic_auth_when_password_set(client, monkeypatch):
-    monkeypatch.setenv("BOOKMIND_AUTH_PASSWORD", "s3cret-pass")
-    assert (await client.get("/")).status_code == 401
-    assert (await client.get("/api/v1/book")).status_code == 401
+    from tests.conftest import ADMIN_PW
+
+    monkeypatch.setenv("BOOKMIND_AUTH_PASSWORD", ADMIN_PW)
+    assert (await client.get("/")).status_code == 200  # the app shell loads, to show the sign-in screen
+    denied = await client.get("/api/v1/book")
+    assert denied.status_code == 401 and "www-authenticate" not in denied.headers  # no browser pop-up
     assert (await client.get("/healthz")).status_code == 200  # probes stay open
-    token = base64.b64encode(b"bookmind:s3cret-pass").decode()
-    assert (await client.get("/", headers={"Authorization": f"Basic {token}"})).status_code == 200
+    token = base64.b64encode(f"bookmind:{ADMIN_PW}".encode()).decode()
+    assert (await client.get("/api/v1/book", headers={"Authorization": f"Basic {token}"})).status_code == 200
 
 
 async def test_internal_token_guards_services(monkeypatch):
@@ -224,8 +231,10 @@ async def test_internal_token_guards_services(monkeypatch):
     monkeypatch.setenv("BOOKMIND_INTERNAL_TOKEN", "t0ken")
     transport = httpx.ASGITransport(app=notebook.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://notebook") as c:
-        assert (await c.get("/v1/notes")).status_code == 401
-        assert (await c.get("/v1/notes", headers={"x-internal-token": "t0ken"})).status_code == 200
+        who = {"x-bookmind-user": "bookmind"}
+        assert (await c.get("/v1/notes", headers=who)).status_code == 401
+        assert (await c.get("/v1/notes", headers={"x-internal-token": "t0ken", **who})).status_code == 200
+        assert (await c.get("/v1/notes", headers={"x-internal-token": "t0ken"})).status_code == 422  # no owner, no notes
         assert (await c.get("/healthz")).status_code == 200
 
 

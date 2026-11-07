@@ -2,6 +2,9 @@
 // Network layer: timeouts, W3C trace headers, and the offline sync engine.
 
 import * as store from "./store.js";
+import "./sync-core.js"; // classic script shared with sw.js; defines self.BookMindSync
+
+const core = self.BookMindSync;
 
 const hex = (n) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => b.toString(16).padStart(2, "0")).join("");
 
@@ -13,23 +16,30 @@ export class HttpError extends Error {
 export async function api(path, { method = "GET", body, timeout = 15000, idempotencyKey, headers = {} } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
-  const h = { Accept: "application/json", traceparent: `00-${hex(16)}-${hex(8)}-01`, ...headers };
+  // X-BookMind: the gateway's CSRF guard — other sites can't add custom headers to requests here.
+  const h = { Accept: "application/json", "X-BookMind": "1", traceparent: `00-${hex(16)}-${hex(8)}-01`, ...headers };
   if (body !== undefined) h["Content-Type"] = "application/json";
   if (idempotencyKey) h["Idempotency-Key"] = idempotencyKey;
   try {
     const res = await fetch(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: h, signal: ctrl.signal, credentials: "same-origin" });
     const data = res.status === 204 ? null : await res.json().catch(() => null);
-    if (!res.ok) throw new HttpError(res.status, data && data.detail, res.headers);
+    if (!res.ok) {
+      // Signed out elsewhere, session expired, or a temporary password to replace: let the app ask.
+      const code = data && data.code;
+      if (code === "auth_required" || code === "password_change_required") dispatchEvent(new CustomEvent("bookmind:auth", { detail: code }));
+      throw new HttpError(res.status, data && data.detail, res.headers);
+    }
     return data;
   } finally {
     clearTimeout(timer);
   }
 }
 
-export const isTransient = (err) => !(err instanceof HttpError) || err.status >= 500 || [408, 409, 425, 429].includes(err.status);
+export const isTransient = (err) => core.isTransient(err);
 
-/** Replays queued note changes in order. Idempotency-Keys make replays safe if a response is
- *  lost; LWW `updated_at` on the server makes them safe across devices. */
+/** Replays queued note changes in order while the app is open (sync-core.js does the work; the
+ *  service worker runs the same code when the app is closed). Idempotency-Keys make replays safe if
+ *  a response is lost; LWW `updated_at` on the server makes them safe across devices. */
 export class SyncEngine {
   constructor({ onChange, onStatus }) {
     this.onChange = onChange;
@@ -37,9 +47,10 @@ export class SyncEngine {
     this.running = null;
     this.failures = 0;
     this.timer = null;
+    this.snapshot = [];
   }
 
-  async pending() { return (await store.outbox()).length; }
+  async pending() { return this.track(); }
 
   schedule(delayMs) {
     clearTimeout(this.timer);
@@ -67,44 +78,38 @@ export class SyncEngine {
   }
 
   async push() {
-    for (const op of await store.outbox()) {
-      try {
-        if (op.op === "put") {
-          const res = await api(`/api/v1/notes/${encodeURIComponent(op.id)}`, { method: "PUT", body: op.payload, idempotencyKey: `put-${op.id}-${op.payload.updated_at}` });
-          const local = await store.getNote(op.id);
-          if (local && local.updated_at === op.payload.updated_at) {
-            if (res.deleted) await store.deleteNote(op.id);
-            else await store.putNote({ ...local, synced: res.applied || local.synced });
-          }
-        } else if (op.op === "delete") {
-          await api(`/api/v1/notes/${encodeURIComponent(op.id)}?updated_at=${op.updated_at}`, { method: "DELETE", idempotencyKey: `del-${op.id}-${op.updated_at}` });
-        }
-        await store.dequeue(op.seq);
-      } catch (err) {
-        if (isTransient(err)) throw err; // keep order: stop and retry later
-        console.warn("dropping unsyncable change", op, err); // 4xx: the change itself is invalid
-        await store.dequeue(op.seq);
-      }
-    }
+    await core.withLock(() => core.pushOutbox(store, api));
   }
 
   async pull() {
-    const data = await api("/api/v1/notes?include_deleted=true", { timeout: 10000 });
-    const queued = new Set((await store.outbox()).map((o) => o.id));
-    let changed = false;
-    for (const remote of data.notes || []) {
-      if (queued.has(remote.id)) continue; // our unsent edit is newer by definition
-      const local = await store.getNote(remote.id);
-      if (!local || (remote.updated_at || 0) > (local.updated_at || 0)) {
-        await store.putNote({ ...remote, synced: true });
-        changed = true;
-      }
+    if (await core.withLock(() => core.pullNotes(store, api))) this.onChange();
+  }
+
+  /** Remember the queue so it can still be sent if the page is closed before the next sync. */
+  async track() {
+    this.snapshot = await store.outbox();
+    return this.snapshot.length;
+  }
+
+  /** Page is being closed or hidden: hand queued changes to the browser with `keepalive`, which lets
+   *  a request outlive the page (browsers without Background Sync — Firefox, Safari — rely on this).
+   *  The outbox isn't cleared here; the next sync replays with the same Idempotency-Keys, so a
+   *  change that already arrived is answered from the server's idempotency store, not applied twice.
+   *  keepalive bodies share a 64 KiB budget per page, so stop before exceeding it. */
+  flushOnExit() {
+    if (!navigator.onLine || !this.snapshot || !this.snapshot.length) return 0;
+    let budget = 60000, sent = 0;
+    this.flushed = this.flushed || new Set();
+    for (const op of this.snapshot) {
+      const key = op.op === "put" ? `put-${op.id}-${op.payload.updated_at}` : `del-${op.id}-${op.updated_at}`;
+      if (this.flushed.has(key)) continue; // hide → show → hide again: don't resend the same change
+      const size = op.op === "put" ? JSON.stringify(op.payload).length : 0;
+      if (size > budget) break;
+      budget -= size;
+      this.flushed.add(key);
+      core.sendOp(op, core.request, { keepalive: true }).catch(() => {});
+      sent += 1;
     }
-    for (const t of data.tombstones || []) {
-      if (queued.has(t.id)) continue;
-      const local = await store.getNote(t.id);
-      if (local && t.updated_at >= (local.updated_at || 0)) { await store.deleteNote(t.id); changed = true; }
-    }
-    if (changed) this.onChange();
+    return sent;
   }
 }

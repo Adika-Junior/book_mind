@@ -145,6 +145,7 @@ button { cursor: pointer; }
 }
 .doclink:hover { background: var(--chrome-line); }
 .doclink.active { border-left-color: var(--chrome-accent); background: color-mix(in srgb, var(--chrome-accent) 18%, transparent); }
+.doclink.active .meta { color: var(--chrome-ink); } /* contrast on the highlighted row */
 .doclink .meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--chrome-soft); margin-top: 4px; }
 .progress { height: 4px; border-radius: 2px; background: var(--chrome-line); margin-top: 7px; overflow: hidden; }
 .progress > span { display: block; height: 100%; width: 0; background: var(--chrome-accent); transition: width .3s ease; }
@@ -364,6 +365,7 @@ button { cursor: pointer; }
 .note .cite a { color: var(--link); text-decoration: none; border-bottom: 1px dotted currentColor; }
 .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 10px; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; text-transform: none; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); }
 .tag.warn { background: color-mix(in srgb, var(--accent) 22%, transparent); border-color: var(--accent); }
+.tag.tag-meaning { border-style: dashed; border-color: var(--secondary); }
 .note blockquote { margin: 0 0 10px; padding: 2px 0 2px 10px; border-left: 2px solid var(--line-strong); font-family: var(--serif); font-style: italic; color: var(--ink-soft); font-size: 14px; }
 .note .answer { font-size: 14.5px; line-height: 1.6; }
 .note .answer h2, .note .answer h3 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--heading); margin: 14px 0 6px; }
@@ -371,7 +373,21 @@ button { cursor: pointer; }
 .note .answer ul, .note .answer ol { margin: 0 0 8px; padding-left: 20px; }
 .note .answer li { margin-bottom: 5px; }
 .note .answer code { font-size: .92em; background: var(--surface-2); padding: 0 4px; border-radius: 3px; }
-.note .answer .ref { color: var(--link); font-weight: 600; white-space: nowrap; }
+/* Citations: a compact chip per [Doc, p.N ¶M] — readable as a source, tappable, never wrapped mid-label. */
+.note .answer .ref, .sources .ref {
+  display: inline-block; white-space: nowrap; font-family: var(--sans); font-size: 0.8em; font-weight: 700;
+  line-height: 1.5; padding: 0 0.5em; margin: 0 0.1em; border-radius: 999px; vertical-align: 0.06em;
+  color: var(--link); background: color-mix(in srgb, var(--link) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--link) 35%, transparent); text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.note .answer .ref:hover, .sources .ref:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
+.note .answer .ref.unresolved { color: var(--ink-soft); border-style: dashed; background: none; }
+.sources { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 13px; }
+.sources summary { cursor: pointer; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--heading); }
+.sources ol { margin: 6px 0 0; padding-left: 22px; }
+.sources li { margin: 0 0 6px; line-height: 1.5; color: var(--ink); }
+.sources q { color: var(--ink-soft); font-style: italic; }
 .note .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
 .linkbtn { background: none; border: 0; padding: 6px 4px; color: var(--link); font-size: 12.5px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; min-height: 32px; }
 .thinking { display: flex; align-items: center; gap: 10px; color: var(--ink-soft); font-size: 14px; }
@@ -558,7 +574,7 @@ input[type="range"] { accent-color: var(--chrome-accent); width: 92px; }
 .insights summary::after { content: "▾"; color: var(--ink-soft); transition: transform .2s ease; }
 .insights details:not([open]) summary::after { transform: rotate(-90deg); }
 .insights summary .count { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--accent-ink); background: var(--accent); border-radius: 10px; padding: 1px 8px; }
-.insights h4 { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); margin: 8px 0 6px; }
+.insights .ins-h { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); margin: 8px 0 6px; }
 .insights ul { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; }
 .insights li { display: flex; align-items: flex-start; gap: 8px; }
 .insights .kind { flex: none; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 1px 8px; margin-top: 2px; background: var(--surface); border: 1px solid var(--line-strong); color: var(--ink); white-space: nowrap; }
@@ -594,4 +610,92 @@ input[type="range"] { accent-color: var(--chrome-accent); width: 92px; }
 .nb-tips summary { cursor: pointer; padding: 10px 0; font-weight: 700; color: var(--heading); }
 .nb-tips ol { margin: 0 0 12px; padding-left: 20px; display: grid; gap: 6px; }
 .page-body .landed { animation: landed 1.8s ease; border-radius: 4px; }
+/* Paragraph numbers (¶) — so "[Bill, p.11 ¶3]" can be found at a glance. In the margin, out of the
+   text flow (pseudo-elements aren't part of the text, so highlights, search and read-aloud ignore them). */
+:root[data-paranums="on"] .page-body { padding-inline-start: 2em; }
+:root[data-paranums="on"] .page-body [data-para] { position: relative; }
+:root[data-paranums="on"] .page-body [data-para]::before {
+  /* em here = the number's own size (0.68 of the text): 2.9em ≈ the 2em gutter. */
+  content: attr(data-para); position: absolute; top: 0; left: -2.9em; width: 2.3em; text-align: right;
+  font-family: var(--sans); font-size: 0.68em; line-height: calc(var(--reader-leading) / 0.68 * 1em);
+  color: var(--ink-soft); font-variant-numeric: tabular-nums; user-select: none; pointer-events: none;
+}
+:root[data-paranums="on"] .page-body .item.depth-2[data-para]::before { left: -6.7em; } /* + the 2.6em indent */
+:root[data-paranums="on"] .page-body .toc[data-para]::before { left: -2.4em; line-height: calc(1.7 / 0.85 * 1em); top: 12px; }
+@media (max-width: 600px) { /* phones: a narrower margin keeps the measure readable */
+  :root[data-paranums="on"] .page-body { padding-inline-start: 1.35em; }
+  :root[data-paranums="on"] .page-body [data-para]::before { left: -2.1em; width: 1.7em; }
+  :root[data-paranums="on"] .page-body .item.depth-2[data-para]::before { left: -5.9em; }
+}
 @keyframes landed { 0%, 35% { background: color-mix(in srgb, var(--accent) 30%, transparent); } 100% { background: transparent; } }
+
+/* Exact-word highlights and notes (text-quote anchored). */
+mark.anchor { color: inherit; cursor: pointer; border-radius: 2px; padding: 0.05em 0; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+mark.anchor.hl { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+mark.anchor.note { background: color-mix(in srgb, var(--secondary) 16%, transparent); box-shadow: inset 0 -2px 0 var(--secondary); }
+.sentence.reading mark.anchor { background: transparent; }
+
+/* ------------------------------------------------------------------ accounts: sign-in, menu, dialogs */
+.login {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 20px;
+  background: var(--chrome); overflow-y: auto;
+}
+.login .card {
+  width: min(400px, 100%); display: flex; flex-direction: column; gap: 6px; padding: 28px 24px;
+  background: var(--bg); color: var(--ink); border-radius: var(--radius); box-shadow: var(--shadow); border-top: 4px solid var(--accent);
+}
+.login img { align-self: center; }
+.login h2 { margin: 6px 0 0; text-align: center; font-family: var(--serif); color: var(--heading); }
+.login .hint { text-align: center; }
+.login .btn { margin-top: 10px; min-height: 46px; }
+.login label, .form-card label { font-size: 13px; font-weight: 700; color: var(--ink); margin-top: 8px; }
+.login input, .form-card input, .form-card select {
+  min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+}
+.login input:focus-visible, .form-card input:focus-visible, .form-card select:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.hint { font-size: 13px; line-height: 1.5; color: var(--ink-soft); margin: 2px 0; }
+.hint.small { font-size: 12px; margin-top: 10px; }
+.form-error {
+  margin: 8px 0 0; padding: 8px 10px; font-size: 13.5px; border-radius: var(--radius-sm); color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 18%, transparent); border-left: 4px solid var(--accent);
+}
+
+.menu {
+  position: fixed; z-index: 75; top: calc(58px + env(safe-area-inset-top, 0px)); right: 10px; min-width: 220px;
+  display: flex; flex-direction: column; padding: 6px; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.menu-head { display: flex; flex-direction: column; padding: 8px 10px 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.menu-head span { font-size: 12px; color: var(--ink-soft); }
+.menu button {
+  min-height: 42px; padding: 0 10px; text-align: left; font: inherit; font-size: 14.5px; color: var(--ink);
+  background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer;
+}
+.menu button:hover, .menu button:focus-visible { background: var(--hl-spoken); outline: none; }
+
+.form-card { padding: 20px; gap: 4px; overflow-y: auto; width: min(460px, 100%); }
+.form-card.wide { width: min(760px, 100%); }
+.form-card h2 { margin: 0 0 4px; font-family: var(--serif); font-size: 1.3rem; color: var(--heading); }
+.form-card .row { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 14px; }
+.form-card .row.head { justify-content: space-between; margin: 0; }
+.form-card .row.head .iconbtn { color: var(--ink); }
+.add-user { display: grid; grid-template-columns: 1.2fr 1.2fr 0.9fr auto; gap: 8px; align-items: end; margin-top: 10px; }
+.add-user > div { display: flex; flex-direction: column; min-width: 0; }
+.add-user .hint { grid-column: 1 / -1; }
+.temp-pw {
+  margin-top: 10px; padding: 12px; border-radius: var(--radius-sm); background: var(--surface-2);
+  border: 1px dashed var(--secondary); font-size: 14px; line-height: 1.5;
+}
+.temp-pw code { font-size: 15px; font-weight: 700; user-select: all; }
+.users-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.user-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+}
+.user-row .who { flex: 1 1 200px; min-width: 0; }
+.user-row .who strong { display: block; }
+.user-row .who span { font-size: 12.5px; color: var(--ink-soft); }
+.user-row .actions { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.user-row.off { opacity: .75; }
+@media (max-width: 640px) { .add-user { grid-template-columns: 1fr 1fr; } .add-user .btn { grid-column: 1 / -1; } }

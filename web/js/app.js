@@ -2,10 +2,12 @@
 // BookMind reader — offline-first PWA front end.
 
 import { api, HttpError, SyncEngine } from "./net.js";
-import { escapeHtml, renderMD } from "./md.js";
-import { definitions, excerpt, extractiveAnswer, searchNotes, searchPassages, tokenize } from "./search.js";
-import { buildOutline, nextHeading, sectionAt, structure } from "./structure.js";
+import * as account from "./account.js";
+import { citeLabel, escapeHtml, parseCite, renderMD } from "./md.js";
+import { definitions, excerpt, extractiveAnswer, loadSemanticPack, paragraphOf, searchNotes, searchPassages, semanticReady, tokenize } from "./search.js";
+import { buildOutline, nextHeading, PARAGRAPH_TYPES, paragraphs, sectionAt, structure } from "./structure.js";
 import { relatedElsewhere, relatedNotes, worthNoting } from "./insights.js";
+import { captureAnchor, paintAnchors } from "./anchor.js";
 import * as store from "./store.js";
 
 const $ = (id) => document.getElementById(id);
@@ -120,10 +122,15 @@ function renderBlocks(body, chunk, docId) {
   body.classList.remove("has-current");
   const counter = { n: 0 };
   const seen = new Set();
+  // Heading levels never skip: sub-headings/questions are h4 only once a section (h3) has started.
+  let inSection = false;
+  let para = 0; // "¶N" in citations: body blocks only, numbered from 1 per page (structure.js)
   for (const b of structure(chunk.text, docId)) {
     let el;
     if (b.type === "sec" || b.type === "sub") {
-      el = document.createElement(b.type === "sec" ? "h2" : "h3");
+      // h1 = app, h2 = the page (screen-reader heading in the kicker), h3/h4 = the document's own.
+      el = document.createElement(b.type === "sec" || !inSection ? "h3" : "h4");
+      if (b.type === "sec") inSection = true;
       el.className = b.type;
       const span = document.createElement("span");
       span.className = "sentence";
@@ -139,7 +146,7 @@ function renderBlocks(body, chunk, docId) {
       el.dataset.level = b.type === "sec" ? "2" : "3";
       el.dataset.label = [b.num, b.text].filter(Boolean).join(" — ");
     } else if (b.type === "q") {
-      el = document.createElement("h3");
+      el = document.createElement(inSection ? "h4" : "h3");
       el.className = "q";
       el.dataset.level = "3";
       el.dataset.label = b.text;
@@ -166,6 +173,7 @@ function renderBlocks(body, chunk, docId) {
       el = document.createElement("p");
       appendSentences(el, b.text, counter, seen);
     }
+    if (PARAGRAPH_TYPES.has(b.type)) el.dataset.para = String(++para);
     body.appendChild(el);
   }
 }
@@ -173,6 +181,7 @@ function renderBlocks(body, chunk, docId) {
 function renderKicker(d, c) {
   const wordsLeft = d.chunks.slice(state.idx).reduce((a, x) => a + (x.words || 200), 0);
   $("pageNo").textContent = `Page ${state.idx + 1} of ${d.chunks.length}`;
+  $("pageHeading").textContent = `${d.title}, page ${state.idx + 1}`;
   $("timeLeft").textContent = `About ${minutes(c.words || 200)} min for this page · ${minutes(wordsLeft)} min left in ${d.short}`;
 }
 
@@ -330,8 +339,8 @@ function openTermPop(btn) {
   const link = document.createElement("a");
   link.href = "#";
   link.className = "ref";
-  link.textContent = `${def.docShort}, p.${def.page}`;
-  link.addEventListener("click", (e) => { e.preventDefault(); closeTermPop(); goTo(def.doc, def.page - 1, { jump: true }); });
+  link.textContent = citeText(def.docShort, def.page, def.para);
+  link.addEventListener("click", (e) => { e.preventDefault(); closeTermPop(); goToParagraph(def.doc, def.page, def.para); });
   src.append("Defined in ", link);
   el.append(strong, body, src);
   document.body.appendChild(el);
@@ -479,30 +488,90 @@ function openNotebook() {
 }
 const closeNotebook = () => setDrawer($("notebook"), $("notebookBtn"), $("panelScrim"), false, mq.panel.matches);
 
-/* =========================================================== read aloud (Web Speech API) */
+/* =========================================================== read aloud (Piper neural voices + Web Speech API) */
+// Two engines behind one player:
+//  * Natural voices — Piper neural TTS on the BookMind server (bookmind/services/tts.py). Consistent
+//    across devices, runs on the reader's own server, and a page you've heard replays offline (the
+//    service worker caches each sentence's audio).
+//  * Device voices — the browser's Web Speech API. Always the fallback: offline and not yet cached,
+//    server busy, or natural voices switched off. Falling back is per sentence, so reading never stops.
 
 const tts = {
   supported: "speechSynthesis" in window,
-  voices: [], playing: false, index: 0, gen: 0, wakeLock: null,
+  voices: [], neural: [], neuralMaxChars: 600, playing: false, index: 0, gen: 0, wakeLock: null,
+  audio: null, prefetched: new Map(), fellBack: false,
 
+  async loadNeural() {
+    try {
+      const data = await api("/api/v1/tts/voices", { timeout: 5000 });
+      this.neural = data.voices || [];
+      this.neuralMaxChars = data.max_chars || 600;
+    } catch { this.neural = []; }
+    this.loadVoices();
+  },
   loadVoices() {
-    if (!this.supported) return;
-    this.voices = speechSynthesis.getVoices();
+    this.voices = this.supported ? speechSynthesis.getVoices() : [];
     const saved = store.prefs.get("voice");
     for (const sel of [$("voiceSelect"), $("voiceSelectM")]) {
       sel.textContent = "";
-      if (!this.voices.length) { sel.add(new Option("Default voice", "")); continue; }
+      if (this.neural.length) {
+        const g = document.createElement("optgroup");
+        g.label = "Natural voices (Piper)";
+        for (const v of this.neural) g.appendChild(new Option(`${v.name} · ${v.language.replace("_", "-")}${v.quality ? " · " + v.quality : ""}`, `piper:${v.id}`));
+        sel.appendChild(g);
+      }
+      const g = this.neural.length ? document.createElement("optgroup") : sel;
+      if (this.neural.length) { g.label = "This device's voices"; sel.appendChild(g); }
+      if (!this.voices.length) g.appendChild(new Option("Default device voice", ""));
       const sorted = [...this.voices].sort((a, b) => (b.lang.startsWith("en") - a.lang.startsWith("en")) || a.name.localeCompare(b.name));
-      for (const v of sorted) sel.add(new Option(`${v.name} (${v.lang})`, v.voiceURI));
-      const match = this.voices.find((v) => v.voiceURI === saved) || this.voices.find((v) => /^en[-_](KE|GB)/i.test(v.lang)) || this.voices.find((v) => v.lang.startsWith("en")) || this.voices[0];
-      if (match) sel.value = match.voiceURI;
+      for (const v of sorted) g.appendChild(new Option(`${v.name} (${v.lang})`, v.voiceURI));
+      const values = [...sel.options].map((o) => o.value);
+      // Keep the reader's choice; otherwise prefer a natural English voice, then a Kenyan/British device voice.
+      const neuralEn = this.neural.find((v) => v.language.startsWith("en"));
+      const device = this.voices.find((v) => /^en[-_](KE|GB)/i.test(v.lang)) || this.voices.find((v) => v.lang.startsWith("en")) || this.voices[0];
+      sel.value = values.includes(saved) ? saved : neuralEn ? `piper:${neuralEn.id}` : device ? device.voiceURI : values[0] || "";
     }
   },
+  neuralId() { const v = $("voiceSelect").value || ""; return v.startsWith("piper:") ? v.slice(6) : null; },
   voice() { return this.voices.find((v) => v.voiceURI === $("voiceSelect").value); },
   spans() { return $("pageBody").querySelectorAll(".sentence"); },
+  rate() { return parseFloat($("rateRange").value) || 1; },
+
+  /** Split an over-long sentence at clause boundaries so each request stays under the server limit. */
+  pieces(text) {
+    const t = text.replace(/\s+/g, " ").trim();
+    if (t.length <= this.neuralMaxChars) return [t];
+    const out = [];
+    let rest = t;
+    while (rest.length > this.neuralMaxChars) {
+      const window = rest.slice(0, this.neuralMaxChars);
+      const cut = Math.max(window.lastIndexOf("; "), window.lastIndexOf(", "), window.lastIndexOf(" — "), window.lastIndexOf(" "));
+      const at = cut > this.neuralMaxChars / 3 ? cut + 1 : this.neuralMaxChars;
+      out.push(rest.slice(0, at).trim());
+      rest = rest.slice(at).trim();
+    }
+    if (rest) out.push(rest);
+    return out;
+  },
+  audioUrl(id, text) { return `/api/v1/tts?voice=${encodeURIComponent(id)}&text=${encodeURIComponent(text)}`; },
+  /** Fetch one piece of audio as a blob (the service worker caches it for offline replays). */
+  fetchAudio(id, text) {
+    const url = this.audioUrl(id, text);
+    if (!this.prefetched.has(url)) {
+      const p = fetch(url, { credentials: "same-origin" }).then((r) => { if (!r.ok) throw new Error(`tts ${r.status}`); return r.blob(); });
+      p.catch(() => this.prefetched.delete(url));
+      this.prefetched.set(url, p);
+      while (this.prefetched.size > 8) this.prefetched.delete(this.prefetched.keys().next().value);
+    }
+    return this.prefetched.get(url);
+  },
+  prefetch(i) {
+    const id = this.neuralId(), span = this.spans()[i];
+    if (id && span) this.fetchAudio(id, this.pieces(span.textContent)[0]).catch(() => {});
+  },
 
   speakFrom(i) {
-    if (!this.supported) { toast("Read-aloud isn't supported in this browser."); return; }
+    if (!this.supported && !this.neuralId()) { toast("Read-aloud isn't supported in this browser."); return; }
     const spans = this.spans();
     if (i >= spans.length) {
       setStatus("Turning the page…");
@@ -517,16 +586,59 @@ const tts = {
     span.classList.add("reading");
     setCurrentBlock(span);
     if (!isElementVisible(span)) span.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-    const u = new SpeechSynthesisUtterance(span.textContent);
+    const next = () => { if (gen === this.gen && this.playing) this.speakFrom(i + 1); };
+    setStatus(`Reading ${DOC().short}, page ${state.idx + 1}`);
+    const id = this.neuralId();
+    if (id) this.speakNeural(id, span.textContent, gen, next);
+    else this.speakDevice(span.textContent, next);
+  },
+  async speakNeural(id, text, gen, next) {
+    const parts = this.pieces(text);
+    this.prefetch(this.index + 1); // fetch the next sentence while this one plays: no gaps
+    try {
+      for (const part of parts) {
+        const blob = await this.fetchAudio(id, part);
+        if (gen !== this.gen) return;
+        await this.playBlob(blob, gen);
+        if (gen !== this.gen) return;
+      }
+      this.fellBack = false;
+      next();
+    } catch {
+      if (gen !== this.gen) return;
+      // Offline and not cached, or the server can't synthesise: read this sentence with the device voice.
+      if (!this.fellBack) toast("Natural voice unavailable right now — using this device's voice.");
+      this.fellBack = true;
+      if (this.supported) this.speakDevice(text, next);
+      else this.stop("The natural voice is unavailable and this browser has no built-in voice.");
+    }
+  },
+  playBlob(blob, gen) {
+    return new Promise((resolve, reject) => {
+      if (!this.audio) { this.audio = new Audio(); this.audio.preservesPitch = true; }
+      const a = this.audio;
+      const url = URL.createObjectURL(blob);
+      const done = (fn) => () => { a.onended = a.onerror = null; URL.revokeObjectURL(url); fn(); };
+      a.onended = done(resolve);
+      a.onerror = done(() => reject(new Error("audio playback failed")));
+      a.src = url;
+      a.playbackRate = this.rate(); // speed changes tempo, not pitch
+      a.play().catch((err) => { if (gen === this.gen) { a.onended = a.onerror = null; URL.revokeObjectURL(url); reject(err); } });
+    });
+  },
+  speakDevice(text, next) {
+    const u = new SpeechSynthesisUtterance(text);
     const v = this.voice();
     if (v) { u.voice = v; u.lang = v.lang; }
-    u.rate = parseFloat($("rateRange").value) || 1;
-    const next = () => { if (gen === this.gen && this.playing) this.speakFrom(i + 1); };
+    u.rate = this.rate();
     u.onend = next;
     u.onerror = (e) => { if (e.error !== "interrupted" && e.error !== "canceled") next(); };
-    setStatus(`Reading ${DOC().short}, page ${state.idx + 1}`);
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
+  },
+  silence() {
+    if (this.supported) speechSynthesis.cancel();
+    if (this.audio) { this.audio.onended = this.audio.onerror = null; this.audio.pause(); }
   },
   play(from = this.index) {
     this.playing = true;
@@ -539,7 +651,7 @@ const tts = {
   // some desktop engines; restarting at the current sentence works everywhere.
   pause() {
     this.playing = false; this.gen++;
-    if (this.supported) speechSynthesis.cancel();
+    this.silence();
     setPlayIcon(false);
     setStatus("Paused — press play to continue from the highlighted sentence.");
     this.releaseWakeLock();
@@ -548,7 +660,7 @@ const tts = {
   stop(msg) {
     const was = this.playing;
     this.playing = false; this.gen++; this.index = 0;
-    if (this.supported) speechSynthesis.cancel();
+    this.silence();
     setPlayIcon(false);
     this.spans().forEach((s) => s.classList.remove("reading", "spoken"));
     if (msg || was) setStatus(msg || "Press play to hear this page.");
@@ -589,6 +701,7 @@ const onSelection = debounce(() => {
   const text = sel.toString().replace(/\s+/g, " ").trim();
   if (text.length < 3) { hideToolbar(); return; }
   state.selection = text;
+  state.selectionAnchor = captureAnchor($("pageBody"), sel.getRangeAt(0));
   const anchor = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
   const span = anchor && anchor.closest(".sentence");
   state.selectionSentence = span ? Number(span.dataset.si) : 0;
@@ -636,6 +749,97 @@ function goToHeading(docId, idx, label) {
   updateDocProgress();
 }
 
+/* ----------------------------------------------------------- citations: [Doc, p.N ¶M] */
+
+const chunkAt = (docId, page) => state.byId[docId] && state.byId[docId].chunks[page - 1];
+
+/** Text of a cited paragraph (or null) — for previews, the Sources list and exports. */
+function paragraphText(docId, page, para) {
+  const c = chunkAt(docId, page);
+  return c && para ? paragraphs(c.text, docId)[para - 1] || null : null;
+}
+
+/** Which paragraph of a note's page holds what the note is about. */
+function noteParagraph(n) {
+  if (n.mode === "ask" || n.mode === "web") return null;
+  const c = chunkAt(n.doc, n.page);
+  const fragment = n.anchor && n.anchor.exact ? n.anchor.exact : n.selection;
+  return c ? paragraphOf(fragment || "", c.text, n.doc) : null;
+}
+
+const citeText = (docShort, page, para) => citeLabel({ short: docShort, page, para });
+
+/** Open a page and land on a paragraph: scroll to it and flash it. */
+function goToParagraph(docId, page, para) {
+  goTo(docId, page - 1, { jump: true });
+  const el = para && $("pageBody").querySelector(`[data-para="${para}"]`);
+  if (el) {
+    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.classList.remove("landed");
+    void el.offsetWidth; // restart the animation on repeat clicks
+    el.classList.add("landed");
+    setTimeout(() => el.classList.remove("landed"), 2200);
+  }
+  updateDocProgress();
+}
+
+/** Follow a rendered citation link (a.ref with data-short/page/para). */
+function openRef(a) {
+  const d = docByShort(a.dataset.short);
+  if (!d) { toast(`“${a.dataset.short}” isn't one of these documents.`); return false; }
+  goToParagraph(d.id, parseInt(a.dataset.page, 10), parseInt(a.dataset.para || "0", 10) || null);
+  return true;
+}
+
+/** Give page-only citations their paragraph when the cited text clearly matches one, then add a
+ *  "Sources" list quoting every cited paragraph so claims can be checked without leaving the note. */
+function enhanceCitations(container) {
+  const seen = new Map();
+  for (const a of container.querySelectorAll("a.ref")) {
+    const d = docByShort(a.dataset.short);
+    const page = parseInt(a.dataset.page, 10);
+    if (!d || !chunkAt(d.id, page)) { a.classList.add("unresolved"); a.title = "Not found in these documents — check this citation"; continue; }
+    if (!a.dataset.para) {
+      const claim = (a.closest("li, p") || a.parentElement).textContent.replace(a.textContent, "");
+      const para = paragraphOf(claim, chunkAt(d.id, page).text, d.id);
+      const text = para && paragraphText(d.id, page, para);
+      // Only when most of the claim's words are in that paragraph — a wrong ¶ is worse than none.
+      const words = new Set(tokenize(claim));
+      const shared = text ? new Set(tokenize(text).filter((w) => words.has(w))).size : 0;
+      if (words.size && shared / words.size >= 0.5) {
+        a.dataset.para = String(para);
+        a.textContent = citeText(d.short, page, para);
+        a.setAttribute("aria-label", `Source: ${d.short}, page ${page}, paragraph ${para}`);
+      }
+    }
+    const para = parseInt(a.dataset.para || "0", 10) || null;
+    const text = paragraphText(d.id, page, para);
+    if (text) a.title = excerpt(text, 220);
+    const key = `${d.id}:${page}:${para || ""}`;
+    if (!seen.has(key)) seen.set(key, { d, page, para, text });
+    a.dataset.n = String([...seen.keys()].indexOf(key) + 1);
+  }
+  if (!seen.size) return;
+  const box = document.createElement("details");
+  box.className = "sources";
+  box.open = seen.size <= 4;
+  const sum = document.createElement("summary");
+  sum.textContent = `Sources (${seen.size})`;
+  const ol = document.createElement("ol");
+  for (const { d, page, para, text } of seen.values()) {
+    const li = document.createElement("li");
+    const a = Object.assign(document.createElement("a"), { href: "#", className: "ref", textContent: citeText(d.short, page, para) });
+    Object.assign(a.dataset, { short: d.short, page: String(page), ...(para ? { para: String(para) } : {}) });
+    li.append(a);
+    const q = document.createElement("q");
+    q.textContent = text ? excerpt(text, 200) : `${d.title}, page ${page}`;
+    li.append(" ", q);
+    ol.appendChild(li);
+  }
+  box.append(sum, ol);
+  container.appendChild(box);
+}
+
 function jumpToClause(clause) {
   const idx = clausePage(clause);
   if (idx >= 0) goToHeading("bill", idx, `clause ${clause}`);
@@ -663,7 +867,8 @@ function renderInsights(d, c) {
 
   const section = (title, items) => {
     if (!items.length) return;
-    const h = document.createElement("h4");
+    const h = document.createElement("h3");
+    h.className = "ins-h";
     h.textContent = title;
     const ul = document.createElement("ul");
     items.forEach((li) => ul.appendChild(li));
@@ -701,8 +906,8 @@ function renderInsights(d, c) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "linktext";
-    b.innerHTML = `<strong>${escapeHtml(r.docShort)}, p.${r.page}</strong> — ${escapeHtml(r.snippet)}`;
-    b.addEventListener("click", () => goTo(r.doc, r.page - 1, { jump: true }));
+    b.innerHTML = `<strong>${escapeHtml(citeText(r.docShort, r.page, r.para))}</strong> — ${escapeHtml(r.snippet)}`;
+    b.addEventListener("click", () => goToParagraph(r.doc, r.page, r.para));
     li.appendChild(b);
     return li;
   }));
@@ -711,7 +916,7 @@ function renderInsights(d, c) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "linktext";
-    b.innerHTML = `<strong>${escapeHtml((KIND[n.mode] || KIND.research).label)} · ${escapeHtml(n.doc_short)}, p.${n.page}</strong> — ${escapeHtml(excerpt(n.comment || n.selection, 160))}`;
+    b.innerHTML = `<strong>${escapeHtml((KIND[n.mode] || KIND.research).label)} · ${escapeHtml(citeText(n.doc_short, n.page, noteParagraph(n)))}</strong> — ${escapeHtml(excerpt(n.comment || n.selection, 160))}`;
     b.addEventListener("click", () => openNote(n.id));
     li.appendChild(b);
     return li;
@@ -809,16 +1014,31 @@ const toServer = (n) => ({
   doc: n.doc, doc_short: n.doc_short, page: n.page, mode: n.mode, selection: n.selection, answer: n.answer || "",
   status: n.status, model: n.model, source: n.source, related: (n.related || []).slice(0, 20), created_at: n.created_at, updated_at: n.updated_at,
   comment: n.comment || "", session: n.session || "", color: n.color || null, chunk_id: n.chunk_id || null,
-  web: (n.web || []).slice(0, 10),
+  web: (n.web || []).slice(0, 10), anchor: n.anchor || null,
 });
 async function queuePut(note) {
   await store.enqueue({ op: "put", id: note.id, payload: toServer(note) });
   requestBackgroundSync();
 }
 function requestBackgroundSync() {
-  // Where supported, the browser wakes the service worker when connectivity returns, and it
-  // tells any open tab to flush the outbox.
+  // Three layers, so a note reaches the server even if the app is closed right after writing it:
+  //  1. Background Sync (Chromium): the browser wakes the service worker when connectivity returns
+  //     — even with no BookMind tab open — and sw.js replays the outbox itself (sync-core.js);
+  //  2. keepalive flush on pagehide/hidden (every browser): see SyncEngine.flushOnExit;
+  //  3. the next time the app opens, SyncEngine replays whatever is still queued.
+  sync && sync.track();
   navigator.serviceWorker?.ready.then((reg) => reg.sync && reg.sync.register("bookmind-sync")).catch(() => {});
+}
+
+async function registerPeriodicSync(reg) {
+  // Periodic Background Sync (installed Chromium PWAs only): the browser occasionally wakes the
+  // worker to push anything left over and pull notes made on other devices, so the notebook is
+  // current the next time it's opened — even offline. The browser decides the real interval.
+  try {
+    if (!("periodicSync" in reg)) return;
+    const perm = await navigator.permissions.query({ name: "periodic-background-sync" });
+    if (perm.state === "granted") await reg.periodicSync.register("bookmind-refresh", { minInterval: 12 * 60 * 60 * 1000 });
+  } catch { /* unsupported or not installed: the other layers still cover it */ }
 }
 
 function newNote(mode, selection, extra = {}) {
@@ -857,7 +1077,7 @@ const filedIn = () => (activeSession() ? ` · filed in “${activeSession()}”`
 async function addHighlight() {
   const selection = takeSelection();
   if (!selection) return;
-  const note = newNote("highlight", selection, { color: "accent" });
+  const note = newNote("highlight", selection, { color: "accent", anchor: state.selectionAnchor });
   state.notes.unshift(note);
   await saveNote(note);
   renderNotes();
@@ -868,7 +1088,7 @@ async function addHighlight() {
 async function addOwnNote() {
   const selection = takeSelection();
   if (!selection) return;
-  const note = newNote("note", selection);
+  const note = newNote("note", selection, { anchor: state.selectionAnchor });
   state.notes.unshift(note);
   await saveNote(note);
   nb.editing = note.id;
@@ -988,7 +1208,8 @@ function noteCard(n) {
   card.className = `note kind-${n.mode}`;
   card.id = "note-" + n.id;
   const sessionTag = n.session && !activeSession() ? `<span class="tag session">${escapeHtml(n.session)}</span>` : "";
-  let html = `<div class="cite"><a href="#" class="goto">${escapeHtml(n.doc_short)}, p.${n.page}</a> · ${kind.label} ${sessionTag}${kind.group === "research" ? sourceTags(n) : (!n.synced ? '<span class="tag">Not synced</span>' : "")}</div>`;
+  const where = citeText(n.doc_short, n.page, noteParagraph(n));
+  let html = `<div class="cite"><a href="#" class="goto" aria-label="Go to ${escapeHtml(where)}">${escapeHtml(where)}</a> · ${kind.label} ${sessionTag}${kind.group === "research" ? sourceTags(n) : (!n.synced ? '<span class="tag">Not synced</span>' : "")}</div>`;
   if (n.mode === "ask") html += `<p class="question">${escapeHtml(n.selection)}</p>`;
   else if (n.mode === "web" && n.web && n.web[0]) {
     const w = n.web[0];
@@ -1019,10 +1240,12 @@ function noteCard(n) {
     <button type="button" class="linkbtn remove">Remove</button></span></div>`;
   card.innerHTML = html;
   card.querySelector(".move").value = n.session || "";
+  const answer = card.querySelector(".answer");
+  if (answer) enhanceCitations(answer);
 
   card.querySelector(".goto").addEventListener("click", (e) => {
     e.preventDefault();
-    goTo(n.doc, n.page - 1, { jump: true });
+    goToParagraph(n.doc, n.page, noteParagraph(n));
     if (n.mode !== "ask" && n.mode !== "web") highlightQuery(n.selection);
     if (!mq.panel.matches) closeNotebook();
   });
@@ -1062,6 +1285,10 @@ function renderNotes() {
   $("exportBtn").disabled = !count;
   renderSessionControls();
   const list = $("notesList");
+  // A sync or new note can re-render the list while you're typing a note: keep the draft, the
+  // cursor and the focus instead of rebuilding the editor empty.
+  const editor = nb.editing && document.getElementById(`edit-${nb.editing}`);
+  const draft = editor && { value: editor.value, start: editor.selectionStart, end: editor.selectionEnd, focused: document.activeElement === editor };
   list.textContent = "";
   if (!count) {
     list.innerHTML = `<div class="empty"><strong>Your research notebook.</strong> Select any passage while reading, then:
@@ -1076,6 +1303,11 @@ function renderNotes() {
     return;
   }
   for (const n of shown) list.appendChild(noteCard(n));
+  const again = draft && document.getElementById(`edit-${nb.editing}`);
+  if (again) {
+    again.value = draft.value;
+    if (draft.focused) { again.focus({ preventScroll: true }); again.setSelectionRange(draft.start, draft.end); }
+  }
 }
 
 function focusEditor(id) {
@@ -1116,16 +1348,18 @@ async function removeNote(n) {
   toast("Removed from your notebook.");
 }
 
-/** Saved highlights and notes are shown on the page they came from; tap one to open it. */
+/** Saved highlights and notes are shown on the page they came from; tap one to open it.
+ *  Exact words where the quote can be found (text-quote anchoring); whole sentences otherwise. */
 function paintSavedHighlights() {
   const body = $("pageBody");
   if (!body || !state.doc) return;
   body.querySelectorAll(".saved").forEach((el) => { el.classList.remove("saved", "saved-hl", "saved-note"); delete el.dataset.note; el.removeAttribute("title"); });
   const here = state.notes.filter((n) => (n.mode === "highlight" || n.mode === "note") && n.doc === state.doc && n.page === state.idx + 1);
-  if (!here.length) return;
+  const missed = paintAnchors(body, here);
+  if (!missed.length) return;
   const norm = (t) => t.replace(/\s+/g, " ").trim().toLowerCase();
   const spans = [...body.querySelectorAll(".sentence")];
-  for (const n of here) {
+  for (const n of missed) {
     const sel = norm(n.selection);
     for (const s of spans) {
       const t = norm(s.textContent);
@@ -1160,13 +1394,13 @@ function exportNotes() {
     let lastDoc = null;
     for (const n of own) {
       if (n.doc !== lastDoc) { md += `### ${state.byId[n.doc]?.title || n.doc_short}\n\n`; lastDoc = n.doc; }
-      md += `**p.${n.page}**\n\n${quote(n.selection)}${yours(n)}\n\n`;
+      md += `**${citeText(n.doc_short, n.page, noteParagraph(n))}**\n\n${quote(n.selection)}${yours(n)}\n\n`;
     }
   }
   const answers = notes.filter((n) => n.mode === "research" || n.mode === "simplify").sort(inReadingOrder);
   if (answers.length) {
     md += "## Research notes\n\n";
-    for (const n of answers) md += `### ${KIND[n.mode].label} — ${n.doc_short}, p.${n.page}\n\n${quote(n.selection)}\n\n${nested(n.answer)}${yours(n)}\n\n`;
+    for (const n of answers) md += `### ${KIND[n.mode].label} — ${citeText(n.doc_short, n.page, noteParagraph(n))}\n\n${quote(n.selection)}\n\n${nested(n.answer)}${yours(n)}\n\n`;
   }
   const webNotes = notes.filter((n) => n.mode === "web");
   const webSeen = new Map();
@@ -1177,16 +1411,29 @@ function exportNotes() {
     for (const n of webNotes) if (n.comment) md += `  - **My note on “${n.web[0]?.title || "source"}”:** ${n.comment}\n`;
     md += "\n";
   }
-  const refs = {};
+  // References: every paragraph the brief cites, with the cited words, grouped by document.
+  const cited = new Map();
+  const addRef = (docId, page, para) => { if (state.byId[docId]) cited.set(`${docId}:${page}:${para || 0}`, { docId, page, para }); };
   for (const n of notes) {
     if (n.mode === "web") continue;
-    (refs[n.doc] ||= new Set()).add(n.page);
-    for (const r of n.related || []) { const d = docByShort(r.docShort); if (d) (refs[d.id] ||= new Set()).add(r.page); }
+    if (n.mode !== "ask") addRef(n.doc, n.page, noteParagraph(n));
+    for (const m of `${n.answer || ""} ${n.comment || ""}`.matchAll(/\[([^[\]]{3,240})\]/g)) {
+      for (const part of m[1].split(/\s*;\s*/)) { const c = parseCite(part); const d = c && docByShort(c.short); if (d) addRef(d.id, c.page, c.para); }
+    }
   }
   md += "## References\n\n";
-  for (const id of state.order) if (refs[id]) md += `- ${state.byId[id].title} — pp. ${[...refs[id]].sort((a, b) => a - b).join(", ")}\n`;
+  for (const id of state.order) {
+    const mine = [...cited.values()].filter((r) => r.docId === id).sort((a, b) => a.page - b.page || (a.para || 0) - (b.para || 0));
+    if (!mine.length) continue;
+    md += `### ${state.byId[id].title}\n\n`;
+    for (const r of mine) {
+      const text = paragraphText(id, r.page, r.para);
+      md += `- **${citeText(state.byId[id].short, r.page, r.para)}**${text ? ` — “${excerpt(text, 240)}”` : ""}\n`;
+    }
+    md += "\n";
+  }
   md += "\n## Verification checklist\n\n" + [
-    "Every claim cites a document and page, e.g. [Bill, p.9].",
+    "Every claim cites a document, page and paragraph, e.g. [Bill, p.9 ¶2], and the quoted words match that paragraph.",
     "Claims about the law are checked against the Bill itself, not only the Digest or a summary.",
     "Web sources are official or intergovernmental where possible; anything else was checked by reading laterally (who publishes it? what do others say?).",
     "Dates are noted: the Bill is a 2026 draft and may have changed since.",
@@ -1230,7 +1477,7 @@ const runSearch = debounce(async (q) => {
   if (seq !== searchSeq) return;
 
   $("searchMeta").textContent = `${passages.length} passage${passages.length === 1 ? "" : "s"}, ${notes.length} note${notes.length === 1 ? "" : "s"}` +
-    (where === "offline" ? " · searched on this device (offline)" : where === "partial" ? " · some results unavailable" : "");
+    (where === "offline" ? ` · searched on this device (offline${semanticReady() ? ", by words and meaning" : ""})` : where === "partial" ? " · some results unavailable" : "");
   results.textContent = "";
   const group = (title, items, render) => {
     if (!items.length) return;
@@ -1240,15 +1487,18 @@ const runSearch = debounce(async (q) => {
   group("In the documents", passages, (p) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "result";
-    b.innerHTML = `<div class="where">${escapeHtml(p.docShort)} · page ${p.page}</div><div class="snippet">${escapeHtml(p.snippet)}</div>`;
-    b.addEventListener("click", () => { closeSearch(); goTo(p.doc, p.page - 1, { jump: true }); highlightQuery(q); });
+    // "Similar meaning": found by what the words mean, not because they appear on the page — say so,
+    // so a reader isn't left hunting for a term that isn't there.
+    const meaning = p.match === "meaning" ? ' · <span class="tag tag-meaning">Similar meaning</span>' : "";
+    b.innerHTML = `<div class="where">${escapeHtml(p.docShort)} · page ${p.page}${p.para ? ` · ¶${p.para}` : ""}${meaning}</div><div class="snippet">${escapeHtml(p.snippet)}</div>`;
+    b.addEventListener("click", () => { closeSearch(); goToParagraph(p.doc, p.page, p.para); highlightQuery(q); });
     return b;
   });
   group("In your notebook", notes, (n) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "result";
     const kind = (KIND[n.mode] || KIND.research).label;
-    b.innerHTML = `<div class="where">${escapeHtml(n.docShort || n.doc)} · p.${n.page} · ${kind}${n.session ? " · " + escapeHtml(n.session) : ""}</div>` +
+    b.innerHTML = `<div class="where">${escapeHtml(citeText(n.docShort || n.doc, n.page, noteParagraph({ ...n, selection: n.selection })))} · ${kind}${n.session ? " · " + escapeHtml(n.session) : ""}</div>` +
       `<div class="snippet">${escapeHtml(n.selection)}</div>${n.comment ? `<div class="snippet"><em>My note:</em> ${escapeHtml(n.comment)}</div>` : ""}`;
     b.addEventListener("click", () => { closeSearch(); openNote(n.id); });
     return b;
@@ -1312,6 +1562,7 @@ async function refreshStatus() {
 /* =========================================================== service worker & install */
 
 let userRequestedReload = false;
+let reauthenticating = false;
 async function registerSW() {
   if (!("serviceWorker" in navigator)) return;
   try {
@@ -1326,7 +1577,13 @@ async function registerSW() {
       w && w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) showUpdate(w); });
     });
     navigator.serviceWorker.addEventListener("controllerchange", () => { if (userRequestedReload) location.reload(); });
-    navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.type === "SYNC") sync && sync.run(); });
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      const type = e.data && e.data.type;
+      if (type === "SYNC") sync && sync.run();
+      // The worker replayed the outbox (or pulled other devices' notes) in the background.
+      if (type === "SYNCED" && sync) { reloadNotes(); updateNetChip(); }
+    });
+    registerPeriodicSync(reg);
     setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
   } catch (err) {
     console.warn("Service worker unavailable (needs HTTPS or localhost):", err);
@@ -1423,7 +1680,7 @@ function wire() {
     const term = e.target.closest(".term");
     if (term) { e.preventDefault(); e.stopPropagation(); termPop && termPop.btn === term ? closeTermPop() : openTermPop(term); return; }
     setCurrentBlock(e.target);
-    const saved = e.target.closest(".saved");
+    const saved = e.target.closest("mark.anchor, .saved");
     if (saved && !tts.playing && getSelection().isCollapsed) openNote(saved.dataset.note);
   });
   $("pageBody").addEventListener("pointerover", (e) => { if (!mq.coarse.matches && !tts.playing) setCurrentBlock(e.target); });
@@ -1438,6 +1695,7 @@ function wire() {
   $("playBtn").addEventListener("click", () => tts.toggle());
   tts.loadVoices();
   if (tts.supported) speechSynthesis.onvoiceschanged = () => tts.loadVoices(); // voices load async on most browsers
+  tts.loadNeural();
   const syncControl = (a, b, key, apply) => {
     for (const [src, dst] of [[a, b], [b, a]]) {
       $(src).addEventListener("input", () => { $(dst).value = $(src).value; store.prefs.set(key, $(src).value); apply && apply($(src).value); });
@@ -1460,7 +1718,10 @@ function wire() {
   }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") { if (tts.playing) tts.acquireWakeLock(); sync.run(); }
+    // "hidden" is the last event mobile browsers reliably deliver before a tab is discarded.
+    else sync.flushOnExit();
   });
+  addEventListener("pagehide", () => sync.flushOnExit());
 
   // Selection toolbar
   document.addEventListener("selectionchange", onSelection);
@@ -1515,6 +1776,11 @@ function wire() {
     store.prefs.set("web_research", e.target.checked);
     toast(e.target.checked ? "Research and Ask will also consult the web (labelled as outside the documents)." : "Research and Ask will use the four documents only.");
   });
+  $("paraNumsToggle").checked = store.prefs.get("paranums", true);
+  $("paraNumsToggle").addEventListener("change", (e) => {
+    store.prefs.set("paranums", e.target.checked);
+    document.documentElement.setAttribute("data-paranums", e.target.checked ? "on" : "off");
+  });
   $("insightsToggle").checked = store.prefs.get("insights", true);
   $("insightsToggle").addEventListener("change", (e) => { store.prefs.set("insights", e.target.checked); renderPage({ keepSpeech: tts.playing }); });
   $("askForm").addEventListener("submit", (e) => {
@@ -1537,10 +1803,7 @@ function wire() {
     const ref = e.target.closest("a.ref");
     if (!ref) return;
     e.preventDefault();
-    const d = docByShort(ref.dataset.short);
-    if (!d) return;
-    goTo(d.id, parseInt(ref.dataset.page, 10) - 1, { jump: true });
-    if (!mq.panel.matches) closeNotebook();
+    if (openRef(ref) && !mq.panel.matches) closeNotebook();
   });
 
   // Search
@@ -1583,10 +1846,40 @@ function wire() {
 
 /* =========================================================== boot */
 
+/** Download the vectors for offline search-by-meaning once the page is idle (≈2 MB, then cached by
+ *  the service worker and revalidated with an ETag). Optional: without it, offline search is BM25. */
+async function loadSemantic() {
+  try {
+    const data = await api("/api/v1/semantic", { timeout: 60000 });
+    loadSemanticPack(data);
+  } catch { /* not enabled on this server, or offline and never cached */ }
+}
+
 async function boot() {
   applyPrefs();
   registerSW();
   store.requestPersistence();
+  // Who is reading? Signs in if needed; offline, the last person signed in on this device continues.
+  const me = await account.establish({ toast });
+  if (!me) {
+    $("bootMsg").textContent = "You're offline, and nobody has signed in on this device yet. Connect once to sign in; after that BookMind works offline.";
+    $("boot").hidden = false;
+    $("bootRetry").onclick = () => location.reload();
+    return;
+  }
+  state.user = me.user;
+  await store.useAccount(me.user.username, { legacyOwner: me.legacy_owner });
+  if (me.user.username === me.legacy_owner) store.prefs.adoptLegacy();
+  account.mountMenu(me, {
+    pendingChanges: () => sync.pending(),
+    beforeSignOut: () => (navigator.onLine ? sync.run() : null),
+    afterSignOut: () => store.signOutDevice(),
+  });
+  addEventListener("bookmind:auth", async (e) => {
+    if (reauthenticating) return;
+    reauthenticating = true;
+    try { if (await account.reauthenticate(e.detail)) sync.run(); } finally { reauthenticating = false; }
+  });
   try {
     await loadBook();
   } catch (err) {
@@ -1609,6 +1902,7 @@ async function boot() {
   loadConfig();
   refreshStatus();
   sync.run();
+  (window.requestIdleCallback || ((fn) => setTimeout(fn, 1500)))(() => loadSemantic());
   setInterval(() => navigator.onLine && sync.run(), 60000);
   setInterval(refreshStatus, 60000);
 }

@@ -1,0 +1,13 @@
+{
+  "name": "bookmind-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser end-to-end tests for BookMind (Playwright + axe-core).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "axe-core": "4.10.3"
+  }
+}

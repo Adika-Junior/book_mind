@@ -26,7 +26,7 @@ test("research workspace: session, highlight, own note, ask, filter, export", as
 
   await page.locator("#askInput").fill("Who appoints the Artificial Intelligence Commissioner?");
   await page.locator("#askInput").press("Enter");
-  await expect(page.locator(".note.kind-ask .answer")).toContainText("[Bill, p.");
+  await expect(page.locator(".note.kind-ask .answer a.ref").first()).toHaveText(/^\w+, p\.\d+ ¶\d+$/);
 
   await page.locator('#nbFilters [data-f="highlights"]').click();
   await expect(page.locator("#notesList .note")).toHaveCount(1);

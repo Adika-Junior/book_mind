@@ -7,8 +7,11 @@
 // (Mayer's signaling principle), and read ALL CAPS ~13% slower (Tinker & Paterson). So we rebuild
 // paragraphs, promote real headings, give clauses a hanging indent, and set headings in title case.
 // See docs/READING-DESIGN.md.
+//
+// bookmind/common/structure.py is a port of this file (the server cites paragraphs too): keep the
+// two in step — tests/test_structure_parity.py compares them on every page.
 
-const BULLET = /^[•▪●‣⁃◦\-–·]\s+/;
+const BULLET = /^[\uf09f\uf0b7\uf0a7\uf076•▪●‣⁃◦\-–·]\s+/; // incl. Symbol/Wingdings bullets PDFs map to private-use code points
 const MARKER = /^\(([a-z]{1,2}|[ivx]{1,5}|\d{1,3})\)\s+/;
 const PART = /^(PART|CHAPTER|SCHEDULE)\s+([IVXLC]+|\d+)\b\s*[—–:-]?\s*(.*)$/i;
 const CLAUSE = /^CLAUSE\s+(\d+[A-Z]?)\s*[—–:-]?\s*(.*)$/i;
@@ -150,6 +153,15 @@ export function structure(text, docId = "") {
   }
   flush();
   return blocks;
+}
+
+/** Body blocks a citation can point to: paragraphs, clauses/list items and contents listings. */
+export const PARAGRAPH_TYPES = new Set(["p", "item", "toc"]);
+
+/** Body paragraphs of a page; "¶N" in a citation is paragraphs(text, docId)[N - 1].
+ *  bookmind/common/structure.py must cut pages identically (tests/test_structure_parity.py). */
+export function paragraphs(text, docId = "") {
+  return structure(text, docId).filter((b) => PARAGRAPH_TYPES.has(b.type)).map((b) => b.text);
 }
 
 /** Headings of a whole document, for the sidebar outline, breadcrumbs and "up next". */

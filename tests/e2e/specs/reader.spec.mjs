@@ -22,7 +22,28 @@ test.describe("reading", () => {
     await open(page);
     await page.locator("#pageBody .term").first().click();
     await expect(page.locator(".term-pop")).toContainText("means");
-    await expect(page.locator(".term-pop .ref")).toContainText("Bill, p.2");
+    await expect(page.locator(".term-pop .ref")).toHaveText(/^Bill, p\.2 ¶\d+$/);
+    // The definition link lands on the paragraph that defines the term.
+    const para = (await page.locator(".term-pop .ref").textContent()).match(/¶(\d+)/)[1];
+    const term = (await page.locator(".term-pop strong").textContent()).toLowerCase();
+    await page.locator(".term-pop .ref").click();
+    const landed = page.locator(`#pageBody [data-para="${para}"]`);
+    await expect(landed).toHaveClass(/landed/);
+    expect((await landed.textContent()).toLowerCase()).toContain(term);
+  });
+
+  test("paragraphs are numbered for citations, and the numbers can be hidden", async ({ page, context }) => {
+    await seed(context, { pos: { doc: "bill", idx: 10 } });
+    await open(page);
+    const nums = await page.locator("#pageBody [data-para]").evaluateAll((els) => els.map((e) => e.dataset.para));
+    expect(nums.length).toBeGreaterThan(2);
+    expect(nums).toEqual(nums.map((_, i) => String(i + 1)));
+    const shown = () => page.locator("#pageBody [data-para]").first().evaluate((e) => getComputedStyle(e, "::before").content);
+    expect(await shown()).toBe('"1"');
+    expect(await page.locator("#pageBody").textContent()).not.toMatch(/^1/); // the number isn't part of the text
+    await page.locator("#settingsBtn").click();
+    await page.locator("#paraNumsToggle").uncheck();
+    expect(await shown()).toBe("none");
   });
 
   test("the three palettes and text settings apply", async ({ page, context }) => {

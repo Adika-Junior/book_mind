@@ -2,9 +2,9 @@
 // BookMind reader — offline-first PWA front end.
 
 import { api, HttpError, SyncEngine } from "./net.js";
-import { escapeHtml, renderMD } from "./md.js";
-import { definitions, excerpt, extractiveAnswer, loadSemanticPack, searchNotes, searchPassages, semanticReady, tokenize } from "./search.js";
-import { buildOutline, nextHeading, sectionAt, structure } from "./structure.js";
+import { citeLabel, escapeHtml, parseCite, renderMD } from "./md.js";
+import { definitions, excerpt, extractiveAnswer, loadSemanticPack, paragraphOf, searchNotes, searchPassages, semanticReady, tokenize } from "./search.js";
+import { buildOutline, nextHeading, PARAGRAPH_TYPES, paragraphs, sectionAt, structure } from "./structure.js";
 import { relatedElsewhere, relatedNotes, worthNoting } from "./insights.js";
 import { captureAnchor, paintAnchors } from "./anchor.js";
 import * as store from "./store.js";
@@ -123,6 +123,7 @@ function renderBlocks(body, chunk, docId) {
   const seen = new Set();
   // Heading levels never skip: sub-headings/questions are h4 only once a section (h3) has started.
   let inSection = false;
+  let para = 0; // "¶N" in citations: body blocks only, numbered from 1 per page (structure.js)
   for (const b of structure(chunk.text, docId)) {
     let el;
     if (b.type === "sec" || b.type === "sub") {
@@ -171,6 +172,7 @@ function renderBlocks(body, chunk, docId) {
       el = document.createElement("p");
       appendSentences(el, b.text, counter, seen);
     }
+    if (PARAGRAPH_TYPES.has(b.type)) el.dataset.para = String(++para);
     body.appendChild(el);
   }
 }
@@ -336,8 +338,8 @@ function openTermPop(btn) {
   const link = document.createElement("a");
   link.href = "#";
   link.className = "ref";
-  link.textContent = `${def.docShort}, p.${def.page}`;
-  link.addEventListener("click", (e) => { e.preventDefault(); closeTermPop(); goTo(def.doc, def.page - 1, { jump: true }); });
+  link.textContent = citeText(def.docShort, def.page, def.para);
+  link.addEventListener("click", (e) => { e.preventDefault(); closeTermPop(); goToParagraph(def.doc, def.page, def.para); });
   src.append("Defined in ", link);
   el.append(strong, body, src);
   document.body.appendChild(el);
@@ -746,6 +748,97 @@ function goToHeading(docId, idx, label) {
   updateDocProgress();
 }
 
+/* ----------------------------------------------------------- citations: [Doc, p.N ¶M] */
+
+const chunkAt = (docId, page) => state.byId[docId] && state.byId[docId].chunks[page - 1];
+
+/** Text of a cited paragraph (or null) — for previews, the Sources list and exports. */
+function paragraphText(docId, page, para) {
+  const c = chunkAt(docId, page);
+  return c && para ? paragraphs(c.text, docId)[para - 1] || null : null;
+}
+
+/** Which paragraph of a note's page holds what the note is about. */
+function noteParagraph(n) {
+  if (n.mode === "ask" || n.mode === "web") return null;
+  const c = chunkAt(n.doc, n.page);
+  const fragment = n.anchor && n.anchor.exact ? n.anchor.exact : n.selection;
+  return c ? paragraphOf(fragment || "", c.text, n.doc) : null;
+}
+
+const citeText = (docShort, page, para) => citeLabel({ short: docShort, page, para });
+
+/** Open a page and land on a paragraph: scroll to it and flash it. */
+function goToParagraph(docId, page, para) {
+  goTo(docId, page - 1, { jump: true });
+  const el = para && $("pageBody").querySelector(`[data-para="${para}"]`);
+  if (el) {
+    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.classList.remove("landed");
+    void el.offsetWidth; // restart the animation on repeat clicks
+    el.classList.add("landed");
+    setTimeout(() => el.classList.remove("landed"), 2200);
+  }
+  updateDocProgress();
+}
+
+/** Follow a rendered citation link (a.ref with data-short/page/para). */
+function openRef(a) {
+  const d = docByShort(a.dataset.short);
+  if (!d) { toast(`“${a.dataset.short}” isn't one of these documents.`); return false; }
+  goToParagraph(d.id, parseInt(a.dataset.page, 10), parseInt(a.dataset.para || "0", 10) || null);
+  return true;
+}
+
+/** Give page-only citations their paragraph when the cited text clearly matches one, then add a
+ *  "Sources" list quoting every cited paragraph so claims can be checked without leaving the note. */
+function enhanceCitations(container) {
+  const seen = new Map();
+  for (const a of container.querySelectorAll("a.ref")) {
+    const d = docByShort(a.dataset.short);
+    const page = parseInt(a.dataset.page, 10);
+    if (!d || !chunkAt(d.id, page)) { a.classList.add("unresolved"); a.title = "Not found in these documents — check this citation"; continue; }
+    if (!a.dataset.para) {
+      const claim = (a.closest("li, p") || a.parentElement).textContent.replace(a.textContent, "");
+      const para = paragraphOf(claim, chunkAt(d.id, page).text, d.id);
+      const text = para && paragraphText(d.id, page, para);
+      // Only when most of the claim's words are in that paragraph — a wrong ¶ is worse than none.
+      const words = new Set(tokenize(claim));
+      const shared = text ? new Set(tokenize(text).filter((w) => words.has(w))).size : 0;
+      if (words.size && shared / words.size >= 0.5) {
+        a.dataset.para = String(para);
+        a.textContent = citeText(d.short, page, para);
+        a.setAttribute("aria-label", `Source: ${d.short}, page ${page}, paragraph ${para}`);
+      }
+    }
+    const para = parseInt(a.dataset.para || "0", 10) || null;
+    const text = paragraphText(d.id, page, para);
+    if (text) a.title = excerpt(text, 220);
+    const key = `${d.id}:${page}:${para || ""}`;
+    if (!seen.has(key)) seen.set(key, { d, page, para, text });
+    a.dataset.n = String([...seen.keys()].indexOf(key) + 1);
+  }
+  if (!seen.size) return;
+  const box = document.createElement("details");
+  box.className = "sources";
+  box.open = seen.size <= 4;
+  const sum = document.createElement("summary");
+  sum.textContent = `Sources (${seen.size})`;
+  const ol = document.createElement("ol");
+  for (const { d, page, para, text } of seen.values()) {
+    const li = document.createElement("li");
+    const a = Object.assign(document.createElement("a"), { href: "#", className: "ref", textContent: citeText(d.short, page, para) });
+    Object.assign(a.dataset, { short: d.short, page: String(page), ...(para ? { para: String(para) } : {}) });
+    li.append(a);
+    const q = document.createElement("q");
+    q.textContent = text ? excerpt(text, 200) : `${d.title}, page ${page}`;
+    li.append(" ", q);
+    ol.appendChild(li);
+  }
+  box.append(sum, ol);
+  container.appendChild(box);
+}
+
 function jumpToClause(clause) {
   const idx = clausePage(clause);
   if (idx >= 0) goToHeading("bill", idx, `clause ${clause}`);
@@ -812,8 +905,8 @@ function renderInsights(d, c) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "linktext";
-    b.innerHTML = `<strong>${escapeHtml(r.docShort)}, p.${r.page}</strong> — ${escapeHtml(r.snippet)}`;
-    b.addEventListener("click", () => goTo(r.doc, r.page - 1, { jump: true }));
+    b.innerHTML = `<strong>${escapeHtml(citeText(r.docShort, r.page, r.para))}</strong> — ${escapeHtml(r.snippet)}`;
+    b.addEventListener("click", () => goToParagraph(r.doc, r.page, r.para));
     li.appendChild(b);
     return li;
   }));
@@ -822,7 +915,7 @@ function renderInsights(d, c) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "linktext";
-    b.innerHTML = `<strong>${escapeHtml((KIND[n.mode] || KIND.research).label)} · ${escapeHtml(n.doc_short)}, p.${n.page}</strong> — ${escapeHtml(excerpt(n.comment || n.selection, 160))}`;
+    b.innerHTML = `<strong>${escapeHtml((KIND[n.mode] || KIND.research).label)} · ${escapeHtml(citeText(n.doc_short, n.page, noteParagraph(n)))}</strong> — ${escapeHtml(excerpt(n.comment || n.selection, 160))}`;
     b.addEventListener("click", () => openNote(n.id));
     li.appendChild(b);
     return li;
@@ -1114,7 +1207,8 @@ function noteCard(n) {
   card.className = `note kind-${n.mode}`;
   card.id = "note-" + n.id;
   const sessionTag = n.session && !activeSession() ? `<span class="tag session">${escapeHtml(n.session)}</span>` : "";
-  let html = `<div class="cite"><a href="#" class="goto">${escapeHtml(n.doc_short)}, p.${n.page}</a> · ${kind.label} ${sessionTag}${kind.group === "research" ? sourceTags(n) : (!n.synced ? '<span class="tag">Not synced</span>' : "")}</div>`;
+  const where = citeText(n.doc_short, n.page, noteParagraph(n));
+  let html = `<div class="cite"><a href="#" class="goto" aria-label="Go to ${escapeHtml(where)}">${escapeHtml(where)}</a> · ${kind.label} ${sessionTag}${kind.group === "research" ? sourceTags(n) : (!n.synced ? '<span class="tag">Not synced</span>' : "")}</div>`;
   if (n.mode === "ask") html += `<p class="question">${escapeHtml(n.selection)}</p>`;
   else if (n.mode === "web" && n.web && n.web[0]) {
     const w = n.web[0];
@@ -1145,10 +1239,12 @@ function noteCard(n) {
     <button type="button" class="linkbtn remove">Remove</button></span></div>`;
   card.innerHTML = html;
   card.querySelector(".move").value = n.session || "";
+  const answer = card.querySelector(".answer");
+  if (answer) enhanceCitations(answer);
 
   card.querySelector(".goto").addEventListener("click", (e) => {
     e.preventDefault();
-    goTo(n.doc, n.page - 1, { jump: true });
+    goToParagraph(n.doc, n.page, noteParagraph(n));
     if (n.mode !== "ask" && n.mode !== "web") highlightQuery(n.selection);
     if (!mq.panel.matches) closeNotebook();
   });
@@ -1188,6 +1284,10 @@ function renderNotes() {
   $("exportBtn").disabled = !count;
   renderSessionControls();
   const list = $("notesList");
+  // A sync or new note can re-render the list while you're typing a note: keep the draft, the
+  // cursor and the focus instead of rebuilding the editor empty.
+  const editor = nb.editing && document.getElementById(`edit-${nb.editing}`);
+  const draft = editor && { value: editor.value, start: editor.selectionStart, end: editor.selectionEnd, focused: document.activeElement === editor };
   list.textContent = "";
   if (!count) {
     list.innerHTML = `<div class="empty"><strong>Your research notebook.</strong> Select any passage while reading, then:
@@ -1202,6 +1302,11 @@ function renderNotes() {
     return;
   }
   for (const n of shown) list.appendChild(noteCard(n));
+  const again = draft && document.getElementById(`edit-${nb.editing}`);
+  if (again) {
+    again.value = draft.value;
+    if (draft.focused) { again.focus({ preventScroll: true }); again.setSelectionRange(draft.start, draft.end); }
+  }
 }
 
 function focusEditor(id) {
@@ -1288,13 +1393,13 @@ function exportNotes() {
     let lastDoc = null;
     for (const n of own) {
       if (n.doc !== lastDoc) { md += `### ${state.byId[n.doc]?.title || n.doc_short}\n\n`; lastDoc = n.doc; }
-      md += `**p.${n.page}**\n\n${quote(n.selection)}${yours(n)}\n\n`;
+      md += `**${citeText(n.doc_short, n.page, noteParagraph(n))}**\n\n${quote(n.selection)}${yours(n)}\n\n`;
     }
   }
   const answers = notes.filter((n) => n.mode === "research" || n.mode === "simplify").sort(inReadingOrder);
   if (answers.length) {
     md += "## Research notes\n\n";
-    for (const n of answers) md += `### ${KIND[n.mode].label} — ${n.doc_short}, p.${n.page}\n\n${quote(n.selection)}\n\n${nested(n.answer)}${yours(n)}\n\n`;
+    for (const n of answers) md += `### ${KIND[n.mode].label} — ${citeText(n.doc_short, n.page, noteParagraph(n))}\n\n${quote(n.selection)}\n\n${nested(n.answer)}${yours(n)}\n\n`;
   }
   const webNotes = notes.filter((n) => n.mode === "web");
   const webSeen = new Map();
@@ -1305,16 +1410,29 @@ function exportNotes() {
     for (const n of webNotes) if (n.comment) md += `  - **My note on “${n.web[0]?.title || "source"}”:** ${n.comment}\n`;
     md += "\n";
   }
-  const refs = {};
+  // References: every paragraph the brief cites, with the cited words, grouped by document.
+  const cited = new Map();
+  const addRef = (docId, page, para) => { if (state.byId[docId]) cited.set(`${docId}:${page}:${para || 0}`, { docId, page, para }); };
   for (const n of notes) {
     if (n.mode === "web") continue;
-    (refs[n.doc] ||= new Set()).add(n.page);
-    for (const r of n.related || []) { const d = docByShort(r.docShort); if (d) (refs[d.id] ||= new Set()).add(r.page); }
+    if (n.mode !== "ask") addRef(n.doc, n.page, noteParagraph(n));
+    for (const m of `${n.answer || ""} ${n.comment || ""}`.matchAll(/\[([^[\]]{3,240})\]/g)) {
+      for (const part of m[1].split(/\s*;\s*/)) { const c = parseCite(part); const d = c && docByShort(c.short); if (d) addRef(d.id, c.page, c.para); }
+    }
   }
   md += "## References\n\n";
-  for (const id of state.order) if (refs[id]) md += `- ${state.byId[id].title} — pp. ${[...refs[id]].sort((a, b) => a - b).join(", ")}\n`;
+  for (const id of state.order) {
+    const mine = [...cited.values()].filter((r) => r.docId === id).sort((a, b) => a.page - b.page || (a.para || 0) - (b.para || 0));
+    if (!mine.length) continue;
+    md += `### ${state.byId[id].title}\n\n`;
+    for (const r of mine) {
+      const text = paragraphText(id, r.page, r.para);
+      md += `- **${citeText(state.byId[id].short, r.page, r.para)}**${text ? ` — “${excerpt(text, 240)}”` : ""}\n`;
+    }
+    md += "\n";
+  }
   md += "\n## Verification checklist\n\n" + [
-    "Every claim cites a document and page, e.g. [Bill, p.9].",
+    "Every claim cites a document, page and paragraph, e.g. [Bill, p.9 ¶2], and the quoted words match that paragraph.",
     "Claims about the law are checked against the Bill itself, not only the Digest or a summary.",
     "Web sources are official or intergovernmental where possible; anything else was checked by reading laterally (who publishes it? what do others say?).",
     "Dates are noted: the Bill is a 2026 draft and may have changed since.",
@@ -1371,15 +1489,15 @@ const runSearch = debounce(async (q) => {
     // "Similar meaning": found by what the words mean, not because they appear on the page — say so,
     // so a reader isn't left hunting for a term that isn't there.
     const meaning = p.match === "meaning" ? ' · <span class="tag tag-meaning">Similar meaning</span>' : "";
-    b.innerHTML = `<div class="where">${escapeHtml(p.docShort)} · page ${p.page}${meaning}</div><div class="snippet">${escapeHtml(p.snippet)}</div>`;
-    b.addEventListener("click", () => { closeSearch(); goTo(p.doc, p.page - 1, { jump: true }); highlightQuery(q); });
+    b.innerHTML = `<div class="where">${escapeHtml(p.docShort)} · page ${p.page}${p.para ? ` · ¶${p.para}` : ""}${meaning}</div><div class="snippet">${escapeHtml(p.snippet)}</div>`;
+    b.addEventListener("click", () => { closeSearch(); goToParagraph(p.doc, p.page, p.para); highlightQuery(q); });
     return b;
   });
   group("In your notebook", notes, (n) => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "result";
     const kind = (KIND[n.mode] || KIND.research).label;
-    b.innerHTML = `<div class="where">${escapeHtml(n.docShort || n.doc)} · p.${n.page} · ${kind}${n.session ? " · " + escapeHtml(n.session) : ""}</div>` +
+    b.innerHTML = `<div class="where">${escapeHtml(citeText(n.docShort || n.doc, n.page, noteParagraph({ ...n, selection: n.selection })))} · ${kind}${n.session ? " · " + escapeHtml(n.session) : ""}</div>` +
       `<div class="snippet">${escapeHtml(n.selection)}</div>${n.comment ? `<div class="snippet"><em>My note:</em> ${escapeHtml(n.comment)}</div>` : ""}`;
     b.addEventListener("click", () => { closeSearch(); openNote(n.id); });
     return b;
@@ -1656,6 +1774,11 @@ function wire() {
     store.prefs.set("web_research", e.target.checked);
     toast(e.target.checked ? "Research and Ask will also consult the web (labelled as outside the documents)." : "Research and Ask will use the four documents only.");
   });
+  $("paraNumsToggle").checked = store.prefs.get("paranums", true);
+  $("paraNumsToggle").addEventListener("change", (e) => {
+    store.prefs.set("paranums", e.target.checked);
+    document.documentElement.setAttribute("data-paranums", e.target.checked ? "on" : "off");
+  });
   $("insightsToggle").checked = store.prefs.get("insights", true);
   $("insightsToggle").addEventListener("change", (e) => { store.prefs.set("insights", e.target.checked); renderPage({ keepSpeech: tts.playing }); });
   $("askForm").addEventListener("submit", (e) => {
@@ -1678,10 +1801,7 @@ function wire() {
     const ref = e.target.closest("a.ref");
     if (!ref) return;
     e.preventDefault();
-    const d = docByShort(ref.dataset.short);
-    if (!d) return;
-    goTo(d.id, parseInt(ref.dataset.page, 10) - 1, { jump: true });
-    if (!mq.panel.matches) closeNotebook();
+    if (openRef(ref) && !mq.panel.matches) closeNotebook();
   });
 
   // Search

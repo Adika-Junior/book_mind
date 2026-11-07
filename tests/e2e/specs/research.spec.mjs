@@ -14,8 +14,21 @@ test.describe("research with the local model and the web", () => {
     const note = page.locator(".note.kind-research").first();
     await expect(note.locator(".answer")).toContainText("Plain-English explanation");
     await expect(note.locator(".cite .tag").first()).toContainText("llama3.2");
-    await expect(note.locator(".answer a.ref").first()).toHaveText("[Bill, p.9]");
+    // Paragraph-level citation, taken from the labelled passages the model was given.
+    const ref = note.locator(".answer > ul a.ref, .answer > p a.ref").first();
+    await expect(ref).toHaveText(/^(Bill|Digest|Strategy|Roadmap), p\.\d+ ¶\d+$/);
+    const [short, pg, para] = (await ref.textContent()).match(/^(\w+), p\.(\d+) ¶(\d+)$/).slice(1);
+    // The Sources list quotes the cited paragraph.
+    await expect(note.locator(".sources summary")).toContainText("Sources");
+    await expect(note.locator(".sources li").first()).toContainText(`${short}, p.${pg} ¶${para}`);
     await expect(note.locator(".answer")).not.toContainText("Beyond the documents"); // web not opted in
+    // Following it lands on that paragraph of that page, and the quote is that paragraph's text.
+    const quote = (await note.locator(".sources li q").first().textContent()).replace(/…$/, "").slice(0, 60);
+    await ref.click();
+    await expect(page.locator("#pageNo")).toContainText(`Page ${pg} of`);
+    const landed = page.locator(`#pageBody [data-para="${para}"]`);
+    await expect(landed).toHaveClass(/landed/);
+    expect((await landed.textContent()).replace(/\s+/g, " ")).toContain(quote.replace(/\s+/g, " "));
   });
 
   test("web search asks first, ranks by source quality, and can be saved", async ({ page }) => {

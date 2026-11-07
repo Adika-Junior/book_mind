@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import re
 
 from bookmind.common.config import get_settings
+from bookmind.common.structure import paragraphs
 from bookmind.common.telemetry import parse_traceparent
-from bookmind.common.text import extract_definitions, extractive_answer, tokenize
+from bookmind.common.text import extract_definitions, extractive_answer, located_sentences, tokenize
 
 
 def chunks():
@@ -24,7 +26,25 @@ def test_extractive_answer_is_cited_and_labelled():
     defs = extract_definitions(chunks())
     related = [{"docShort": "Bill", "page": 9, "text": "A deployer of a high-risk system shall conduct a risk assessment."}]
     md = extractive_answer("simplify", "the deployer", related, defs, "model down")
-    assert "**deployer**" in md and "[Bill, p.9]" in md and "model down" in md
+    assert "**deployer**" in md and "[Bill, p.9 ¶1]" in md and "model down" in md
+    assert re.search(r"\*\*deployer\*\* .* \[Bill, p\.\d+ ¶\d+\]", md)  # definitions cite their paragraph too
+
+
+def test_every_definition_cites_the_paragraph_that_contains_it():
+    pages = {c["id"]: c for c in chunks()}
+    for d in extract_definitions(chunks()):
+        c = pages[d["chunk_id"]]
+        para = paragraphs(c["text"], c["doc"])[d["para"] - 1]
+        assert d["term"].lower() in para.lower(), d["term"]
+
+
+def test_quoted_sentences_come_from_the_cited_paragraph():
+    page = next(c for c in chunks() if c["id"] == "bill-10")
+    paras = paragraphs(page["text"], "bill")
+    picks = located_sentences("synthetic media using a person's voice without consent", page["text"], "bill", 2)
+    assert picks
+    for sentence, para in picks:
+        assert sentence in " ".join(paras[para - 1].split())
 
 
 def test_traceparent_parsing():

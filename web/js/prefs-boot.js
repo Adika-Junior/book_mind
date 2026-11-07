@@ -12,6 +12,7 @@
   root.setAttribute("data-font", get("font", "literata"));
   root.setAttribute("data-spacing", get("spacing", "normal"));
   root.setAttribute("data-focus", get("focus", "off"));
+  root.setAttribute("data-paranums", get("paranums", true) ? "on" : "off");
   root.style.setProperty("--reader-size", get("size", 19) + "px");
   root.style.setProperty("--reader-leading", String(get("leading", 1.65)));
   root.style.setProperty("--reader-measure", get("measure", 66) + "ch");

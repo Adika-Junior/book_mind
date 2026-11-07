@@ -7,6 +7,21 @@ export function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// "Bill, p.11 ¶3" — also tolerates what models write instead: "p. 11", "¶ 3", "para 3", "paragraph 3".
+const CITE = /^([A-Za-z][A-Za-z .]{0,30}?),\s*p\.\s?(\d{1,4})(?:,?\s*(?:¶|para(?:graph)?\.?)\s?(\d{1,3}))?$/;
+
+export function parseCite(text) {
+  const m = String(text).trim().match(CITE);
+  return m ? { short: m[1].trim(), page: Number(m[2]), para: m[3] ? Number(m[3]) : null } : null;
+}
+
+export const citeLabel = (c) => `${c.short}, p.${c.page}${c.para ? ` ¶${c.para}` : ""}`;
+
+function citeLink(c) {
+  const spoken = `${c.short}, page ${c.page}${c.para ? `, paragraph ${c.para}` : ""}`;
+  return `<a href="#" class="ref" data-short="${c.short}" data-page="${c.page}"${c.para ? ` data-para="${c.para}"` : ""} aria-label="Source: ${spoken}">${citeLabel(c)}</a>`;
+}
+
 function inline(s) {
   // [text](https://…) external links are lifted out first so later rules (e.g. _italic_) can't
   // touch the URL — Wikipedia URLs are full of underscores. Runs on escaped text, so the URL
@@ -21,9 +36,11 @@ function inline(s) {
     .replace(/(^|[^*])\*(?!\s)(.+?)\*(?!\*)/g, "$1<em>$2</em>")
     .replace(/(^|\W)_(?!\s)(.+?)_(?=\W|$)/g, "$1<em>$2</em>")
     .replace(/`(.+?)`/g, "<code>$1</code>")
-    // Citations like [Bill, p.4] become links back into the book.
-    .replace(/\[([A-Za-z][A-Za-z .]{0,30}), p\.\s?(\d{1,4})\]/g, (_, doc, page) =>
-      `<a href="#" class="ref" data-short="${doc.trim()}" data-page="${page}">[${doc.trim()}, p.${page}]</a>`);
+    // Citations — [Bill, p.11 ¶3], [Bill, p.11], or several in one bracket — become links into the book.
+    .replace(/\[([^[\]]{3,240})\]/g, (whole, inner) => {
+      const cites = inner.split(/\s*;\s*/).map(parseCite);
+      return cites.every(Boolean) ? cites.map(citeLink).join(" ") : whole;
+    });
   return s.replace(/\u0000(\d+)\u0000/g, (_, i) =>
     `<a href="${links[i][1]}" target="_blank" rel="noopener noreferrer" class="ext">${links[i][0]}</a>`);
 }

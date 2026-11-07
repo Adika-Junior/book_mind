@@ -123,11 +123,12 @@ Offline mode needs HTTPS (browsers only allow service workers on HTTPS or `local
 | Listen | ▶ (Space). Choose voice / speed / text size in the bar (⚙ on phones): **Natural voices (Piper)** from your server, or this device's voices. Tap a sentence to jump there. Lock-screen controls work. |
 | Highlight / note | Select text → **Highlight** to keep it, or **Note** to write your own thoughts about it. Your highlights show on the page; tap one to open it. |
 | Research / Simplify | Select text → **Research** (cited explanation) or **Simplify** (plain-English definition), or **Read from here** |
-| Ask the documents | **Notebook → Ask the documents**: type a question, get an answer citing `[Doc, p.N]` |
+| Ask the documents | **Notebook → Ask the documents**: type a question, get an answer citing `[Doc, p.N ¶M]` (document, page, paragraph) |
 | Research sessions | **Notebook → New session** (e.g. "Penalties & enforcement"). New work is filed there; move any note with its session menu. |
 | Review & export | Filter (All · Highlights · My notes · Research), search your notebook, sort newest or reading order, add *Your note* to any answer, **Export brief** (Markdown: questions, highlights & notes in reading order, research notes, references) |
 | Search | 🔍 or `/`. Searches all four documents and your notes, online or offline, by words *and meaning*. Results found by meaning alone are tagged **Similar meaning**. |
-| Notebook | **Notebook** button (top right) or `n`. Citations like `[Bill, p.9]` jump to the page. |
+| Notebook | **Notebook** button (top right) or `n`. |
+| Citations | Every answer cites document, page and paragraph, e.g. **Bill, p.11 ¶3**. Tap one to land on that paragraph (it flashes). Each answer ends with **Sources**, quoting every cited paragraph. Paragraph numbers sit in the page margin (hide them in **Aa → Reading aids**). |
 | Go back | After a search or citation jump, the sidebar offers **Return** to where you were. |
 
 ---

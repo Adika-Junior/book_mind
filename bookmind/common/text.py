@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import re
 
+from bookmind.common.structure import cite, paragraphs
+
 STOPWORDS = frozenset(
     (
         "the a an of to in on for and or is are was were be by with as at from this that "
@@ -59,10 +61,56 @@ def extract_definitions(chunks: list[dict]) -> list[dict]:
                     "doc": c["doc"],
                     "docShort": c["docShort"],
                     "page": c["page"],
+                    "para": paragraph_of(squash(body)[:60], c["text"], c["doc"]),
                     "chunk_id": c["id"],
                 }
             )
     return out
+
+
+def located_sentences(query: str, text: str, doc: str, n: int = 2) -> list[tuple[str, int]]:
+    """Best-matching sentences of a page with the paragraph each comes from: [(sentence, ¶)].
+
+    Sentences are cut per paragraph (not across the page) so every quote has exactly one
+    paragraph to cite. Ranked like best_sentences: most query words, then earliest.
+    Mirrored in web/js/search.js (locatedSentences)."""
+    q = set(tokenize(query))
+    scored = []
+    pos = 0
+    for para, ptext in enumerate(paragraphs(text, doc), start=1):
+        for s in sentences(ptext):
+            overlap = len(q & set(tokenize(s)))
+            if overlap:
+                scored.append((overlap, -pos, s, para))
+            pos += 1
+    scored.sort(reverse=True)
+    return [(s, para) for _, _, s, para in scored[:n]]
+
+
+def paragraph_of(fragment: str, text: str, doc: str) -> int | None:
+    """The paragraph (1-based) of a page that contains `fragment`, else the one sharing most words."""
+    paras = paragraphs(text, doc)
+    probe = squash(fragment)[:80].lower()
+    if probe:
+        for i, p in enumerate(paras, start=1):
+            if probe in squash(p).lower():
+                return i
+    words = set(tokenize(fragment))
+    best = max(((len(words & set(tokenize(p))), -i) for i, p in enumerate(paras, start=1)), default=(0, 0))
+    return -best[1] if best[0] else None
+
+
+def cited_quote(picks: list[tuple[str, int]], doc_short: str, page: int, max_len: int = 420) -> str:
+    """'sentence sentence [Bill, p.11 ¶3]' — consecutive picks from one paragraph share a citation."""
+    out, run, run_para = [], [], None
+    for sentence, para in picks + [("", -1)]:
+        if para != run_para and run:
+            out.append(f"{excerpt(' '.join(run), max_len)} {cite(doc_short, page, run_para)}")
+            run = []
+        run_para = para
+        if sentence:
+            run.append(sentence)
+    return " ".join(out)
 
 
 def best_sentences(query: str, text: str, n: int = 2) -> list[str]:
@@ -81,7 +129,7 @@ def extractive_answer(
 ) -> str:
     """A grounded answer built only from the corpus — used when the model is unavailable.
 
-    Same shape as the model's output (markdown with ## headings, [Doc, p.N] citations), so the
+    Same shape as the model's output (markdown with ## headings, [Doc, p.N ¶M] citations), so the
     notebook renders it identically. Mirrored client-side in web/js/research.js.
     """
     sel_lower = selection.lower()
@@ -95,15 +143,15 @@ def extractive_answer(
     if matched_defs:
         parts.append("## Defined terms")
         parts += [
-            f"- **{d['term']}** {excerpt(d['definition'], 360)} [{d['docShort']}, p.{d['page']}]"
+            f"- **{d['term']}** {excerpt(d['definition'], 360)} {cite(d['docShort'], d['page'], d.get('para'))}"
             for d in matched_defs[:6]
         ]
     if related:
         parts.append("## Related wording elsewhere" if mode == "simplify" else "## What the documents say")
         for r in related[:4]:
-            picks = best_sentences(selection, r.get("text") or r.get("snippet", ""), 2)
+            picks = located_sentences(selection, r.get("text") or r.get("snippet", ""), r.get("doc", ""), 2)
             if picks:
-                parts.append(f"- {excerpt(' '.join(picks), 420)} [{r['docShort']}, p.{r['page']}]")
+                parts.append(f"- {cited_quote(picks, r['docShort'], r['page'])}")
     if web:
         parts.append("## Beyond the documents (web)")
         for w in web[:4]:

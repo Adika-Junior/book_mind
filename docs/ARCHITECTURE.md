@@ -209,6 +209,16 @@ broker-neutral.
   one sentence of WAV at a time with the next prefetched, and falls back per sentence to the Web
   Speech API. Audio responses are immutable, so the service worker caches them (600 sentences,
   oldest evicted) and listened pages replay offline.
+- **Paragraph-level citations**: answers cite `[Doc, p.N ¶M]`. A paragraph is a body block
+  (paragraph, clause/list item, contents listing) as the reader renders it, numbered from 1 per
+  page. `web/js/structure.js` cuts pages in the browser and `bookmind/common/structure.py` is a
+  rule-for-rule port so the server numbers identically; `tests/test_structure_parity.py` compares
+  both on all 260 pages. The model is given passages already labelled `[Bill, p.11 ¶3] text` and
+  told to copy labels (tested: every label names the paragraph that follows it); extractive and
+  offline answers cut sentences per paragraph, so each quote has exactly one paragraph. The client
+  renders citations as links that land on the paragraph, fills in a missing ¶ only when the claim
+  clearly matches one paragraph, marks citations to pages that don't exist, and lists "Sources"
+  with the cited words under every answer. Exported briefs list every cited paragraph with a quote.
 - **Offline intelligence**: JS hybrid search over all 260 pages, and offline "Research/Simplify"
   that returns the Bill's own definitions plus cited best-matching sentences. It uses the same
   logic as the server's fallback.

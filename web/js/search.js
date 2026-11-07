@@ -4,6 +4,8 @@
 // network (or the search service) is unavailable, so search and grounded "research" keep working on
 // a plane. Keep STOPWORDS, the token regex and the fusion in sync with Python (services/search.py).
 
+import { paragraphs } from "./structure.js";
+
 const STOPWORDS = new Set((
   "the a an of to in on for and or is are was were be by with as at from this that " +
   "shall which it its their they he she who whom will would may not no into within under over about " +
@@ -152,6 +154,52 @@ const SEMANTIC_WEIGHT = 0.7, MIN_SIMILARITY = 0.2, RELATIVE_SIMILARITY = 0.8;
 // Tables of contents match everything and help least: rank them below what they point to (as the server does).
 const NAV_PAGE = /ARRANGEMENT OF (CLAUSES|SECTIONS)|TABLE OF CONTENTS|^\s*Contents\b/i, NAV_PRIOR = 0.8;
 
+/** Best-matching sentences of a page with the paragraph each comes from: [{s, para}].
+ *  Same as bookmind/common/text.py located_sentences (sentences are cut per paragraph). */
+export function locatedSentences(query, text, docId, n = 2) {
+  const q = new Set(tokenize(query));
+  const scored = [];
+  let pos = 0;
+  paragraphs(text, docId).forEach((p, k) => {
+    for (const s of sentences(p)) {
+      const o = tokenize(s).filter((w) => q.has(w)).length;
+      if (o) scored.push({ s, para: k + 1, o, pos });
+      pos++;
+    }
+  });
+  // Python sorts set-overlap; mirror that by counting distinct words.
+  for (const x of scored) x.o = new Set(tokenize(x.s).filter((w) => q.has(w))).size;
+  return scored.sort((a, b) => b.o - a.o || a.pos - b.pos).slice(0, n).map(({ s, para }) => ({ s, para }));
+}
+
+/** The paragraph (1-based) containing `fragment`, else the one sharing most words; null if none. */
+export function paragraphOf(fragment, text, docId) {
+  const paras = paragraphs(text, docId);
+  const probe = squash(fragment).slice(0, 80).toLowerCase();
+  if (probe) {
+    const i = paras.findIndex((p) => squash(p).toLowerCase().includes(probe));
+    if (i >= 0) return i + 1;
+  }
+  const words = new Set(tokenize(fragment));
+  let best = 0, at = null;
+  paras.forEach((p, i) => { const o = new Set(tokenize(p).filter((w) => words.has(w))).size; if (o > best) { best = o; at = i + 1; } });
+  return at;
+}
+
+export const cite = (docShort, page, para) => (para ? `[${docShort}, p.${page} ¶${para}]` : `[${docShort}, p.${page}]`);
+
+/** "sentence sentence [Bill, p.11 ¶3]" — consecutive picks from one paragraph share a citation. */
+export function citedQuote(picks, docShort, page, maxLen = 420) {
+  const out = [];
+  let run = [], runPara = null;
+  for (const { s, para } of [...picks, { s: "", para: -1 }]) {
+    if (para !== runPara && run.length) { out.push(`${excerpt(run.join(" "), maxLen)} ${cite(docShort, page, runPara)}`); run = []; }
+    runPara = para;
+    if (s) run.push(s);
+  }
+  return out.join(" ");
+}
+
 export function searchPassages(chunks, query, k = 8, excludeId = null, { mode = "hybrid" } = {}) {
   const idx = buildIndex(chunks);
   const bm = mode === "semantic" ? chunks.map(() => 0) : idx.bm25.scores(query);
@@ -171,10 +219,11 @@ export function searchPassages(chunks, query, k = 8, excludeId = null, { mode = 
     .sort((a, b) => b.score - a.score)
     .slice(0, k)
     .map(({ score, i, c }) => {
-      let words = bestSentences(query, c.text, 2).join(" ");
-      if (!words && sem && sem.bestWin[i] >= 0) words = windowText(c.text, sem.bestWin[i]);
+      const picks = locatedSentences(query, c.text, c.doc, 2);
+      let words = picks.map((p) => p.s).join(" "), para = picks.length ? picks[0].para : null;
+      if (!words && sem && sem.bestWin[i] >= 0) { words = windowText(c.text, sem.bestWin[i]); para = paragraphOf(words, c.text, c.doc); }
       return {
-        id: c.id, doc: c.doc, docShort: c.docShort, docTitle: c.docTitle, page: c.page, score,
+        id: c.id, doc: c.doc, docShort: c.docShort, docTitle: c.docTitle, page: c.page, para, score,
         match: bm[i] <= 0 ? "meaning" : sem ? "both" : "words",
         snippet: excerpt(words || c.text, 320), text: c.text,
       };
@@ -215,7 +264,7 @@ export function definitions(chunks) {
       const key = m[1].trim().toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      defs.push({ term: m[1].trim(), definition: `${m[2]} ${squash(m[3])}`, docShort: c.docShort, page: c.page, doc: c.doc });
+      defs.push({ term: m[1].trim(), definition: `${m[2]} ${squash(m[3])}`, docShort: c.docShort, page: c.page, doc: c.doc, para: paragraphOf(squash(m[3]).slice(0, 60), c.text, c.doc) });
     }
   }
   defsCache = { chunks, defs };
@@ -234,20 +283,20 @@ export function extractiveAnswer(mode, selection, chunks, reason, excludeId = nu
   const parts = [];
   if (defs.length) {
     parts.push("## Defined terms");
-    for (const d of defs.slice(0, 6)) parts.push(`- **${d.term}** ${excerpt(d.definition, 360)} [${d.docShort}, p.${d.page}]`);
+    for (const d of defs.slice(0, 6)) parts.push(`- **${d.term}** ${excerpt(d.definition, 360)} ${cite(d.docShort, d.page, d.para)}`);
   }
   if (related.length) {
     parts.push(mode === "research" ? "## What the documents say" : "## Related wording elsewhere");
     for (const r of related) {
-      const picks = bestSentences(selection, r.text, 2);
-      if (picks.length) parts.push(`- ${excerpt(picks.join(" "), 420)} [${r.docShort}, p.${r.page}]`);
+      const picks = locatedSentences(selection, r.text, r.doc, 2);
+      if (picks.length) parts.push(`- ${citedQuote(picks, r.docShort, r.page)}`);
     }
   }
   if (!defs.length && !related.length) parts.push("No closely related passages or defined terms were found in these documents.");
   parts.push(`\n_Extractive note — quoted from the documents without a language model (${reason})._`);
   return {
     answer: parts.join("\n"),
-    related: related.map((r) => ({ id: r.id, docShort: r.docShort, page: r.page })),
+    related: related.map((r) => ({ id: r.id, docShort: r.docShort, page: r.page, para: r.para })),
     source: "offline",
     model: null,
   };

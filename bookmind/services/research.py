@@ -26,8 +26,9 @@ from bookmind.common.kv import get_kv
 from bookmind.common.resilience import CircuitBreaker, CircuitOpenError, ConcurrencyLimiter, OverloadedError
 from bookmind.common.rpc import ServiceClient
 from bookmind.common.service import create_service
+from bookmind.common.structure import cite, doc_of, paragraphs
 from bookmind.common.telemetry import GENERATIONS, log
-from bookmind.common.text import excerpt, extractive_answer, squash
+from bookmind.common.text import excerpt, extractive_answer, squash, tokenize
 
 logger = logging.getLogger("bookmind.research")
 settings = get_settings()
@@ -59,10 +60,23 @@ class ModelUnavailable(RuntimeError):
     pass
 
 
+def labelled_paragraphs(query: str, text: str, doc: str, doc_short: str, page: int, k: int, max_len: int) -> list[str]:
+    """The k paragraphs of a page most relevant to the query, each labelled with its citation,
+    in reading order: '[Bill, p.11 ¶3] text'. The model is told to cite these labels verbatim."""
+    paras = paragraphs(text, doc)
+    q = set(tokenize(query))
+    ranked = sorted(range(len(paras)), key=lambda i: (-len(q & set(tokenize(paras[i]))), i))[:k]
+    return [f"{cite(doc_short, page, i + 1)} {excerpt(paras[i], max_len)}" for i in sorted(ranked)]
+
+
 def build_prompt(req: GenerateRequest, related: list[dict], web: list[dict] | None = None) -> str:
-    related_txt = "\n".join(
-        f"- [{r['docShort']}, p.{r['page']}] {excerpt(r.get('text') or r.get('snippet', ''), 320)}" for r in related
-    ) or "(No closely related passages were found elsewhere in these documents.)"
+    related_lines = []
+    for r in related:
+        text = r.get("text") or r.get("snippet", "")
+        related_lines += labelled_paragraphs(req.selection, text, r.get("doc", ""), r["docShort"], r["page"], 2, 320)
+    related_txt = "\n".join(f"- {line}" for line in related_lines) or "(No closely related passages were found elsewhere in these documents.)"
+    context = labelled_paragraphs(req.selection, req.context_text, doc_of(req.chunk_id), req.doc_short, req.page, 4, 300)
+    context_txt = "\n".join(f"- {line}" for line in context) or excerpt(req.context_text, 900)
     asking = req.mode == "ask"
     header = (
         "You are a research assistant built into a digital reader for Kenya's AI policy documents: "
@@ -76,7 +90,7 @@ def build_prompt(req: GenerateRequest, related: list[dict], web: list[dict] | No
     body = (
         "<documents>\n"
         f'{"QUESTION" if asking else "HIGHLIGHTED TEXT"}:\n"{req.selection}"\n\n'
-        f"SURROUNDING PAGE CONTEXT:\n{excerpt(req.context_text, 900)}\n\n"
+        f"PARAGRAPHS FROM THE PAGE BEING READ:\n{context_txt}\n\n"
         f"RELATED PASSAGES FOUND ELSEWHERE IN THESE DOCUMENTS:\n{related_txt}\n"
         "</documents>"
     )
@@ -91,7 +105,7 @@ def build_prompt(req: GenerateRequest, related: list[dict], web: list[dict] | No
     if asking:
         task = (
             "\n\nTASK: Answer the reader's QUESTION using only the documents above. Start with a direct answer in "
-            "1-3 sentences, then '## Evidence' as bullets citing [DocShort, p.N], then '## Gaps' listing anything the "
+            "1-3 sentences, then '## Evidence' as bullets, each ending with its citation, then '## Gaps' listing anything the "
             'documents do not settle. If the documents do not answer it, say "not found in these documents".'
         )
     elif req.mode == "simplify":
@@ -105,7 +119,7 @@ def build_prompt(req: GenerateRequest, related: list[dict], web: list[dict] | No
         task = (
             "\n\nTASK: Produce a well-organized research note in markdown (use ## sub-headings, no top-level "
             "title) with:\n## Plain-English explanation\n## Why it matters\n"
-            "## Related provisions (cite as [DocShort, p.N] from the related passages above; say \"none found\" "
+            "## Related provisions (from the related passages above; say \"none found\" "
             "if there are none)\n## Worth checking further\n"
             "Be concise and skimmable. Ground every claim in the documents provided; do not fabricate clause "
             'numbers. If the documents do not answer something, say "not found in these documents".'
@@ -114,6 +128,11 @@ def build_prompt(req: GenerateRequest, related: list[dict], web: list[dict] | No
         task += (
             "\nKeep the four documents as your primary source. Put anything from WEB SOURCES only in a final "
             "'## Beyond the documents' section, citing [Web: domain], and say it has not been checked against the law."
+        )
+    if req.mode != "simplify":
+        task += (
+            "\nCITATIONS: every passage above starts with its label, e.g. [Bill, p.11 ¶3] = document, page, paragraph. "
+            "End each claim with the label of the paragraph it comes from, copied exactly. Never invent a label."
         )
     return header + "\n\n" + body + task
 
@@ -193,7 +212,7 @@ async def generate(req: GenerateRequest):
         return {**cached, "cached": True}
 
     related, web = await asyncio.gather(related_passages(req), web_sources(req, current))
-    refs = [{"id": r["id"], "docShort": r["docShort"], "page": r["page"]} for r in related]
+    refs = [{"id": r["id"], "docShort": r["docShort"], "page": r["page"], "para": r.get("para")} for r in related]
 
     reason = None
     if not current.get("llm_enabled", True):

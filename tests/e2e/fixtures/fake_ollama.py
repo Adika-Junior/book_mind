@@ -5,6 +5,7 @@ It answers in the shape the prompts ask for and echoes which sections it was giv
 check that web sources reach the model only when the reader opted in.
 """
 import json
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -27,8 +28,12 @@ class H(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         prompt = body["messages"][-1]["content"]
         web = "<web_sources>" in prompt
+        # Behave like a well-instructed model: cite the paragraph labels the prompt provides
+        # ("[Bill, p.9 ¶2]"), plus one page-only citation, as models sometimes write.
+        labels = re.findall(r"^- (\[[A-Za-z ]+, p\.\d+ ¶\d+\])", prompt, re.M)
+        first = labels[0] if labels else "[Bill, p.9]"
         answer = (
-            "## Plain-English explanation\nProviders and deployers of high-risk systems must assess risks first. [Bill, p.9]\n"
+            f"## Plain-English explanation\nProviders and deployers of high-risk systems must assess risks first. {first}\n"
             "## Why it matters\nIt puts duties on those who build and use AI. [Digest, p.14]"
         )
         if web:

@@ -373,7 +373,21 @@ button { cursor: pointer; }
 .note .answer ul, .note .answer ol { margin: 0 0 8px; padding-left: 20px; }
 .note .answer li { margin-bottom: 5px; }
 .note .answer code { font-size: .92em; background: var(--surface-2); padding: 0 4px; border-radius: 3px; }
-.note .answer .ref { color: var(--link); font-weight: 600; white-space: nowrap; }
+/* Citations: a compact chip per [Doc, p.N ¶M] — readable as a source, tappable, never wrapped mid-label. */
+.note .answer .ref, .sources .ref {
+  display: inline-block; white-space: nowrap; font-family: var(--sans); font-size: 0.8em; font-weight: 700;
+  line-height: 1.5; padding: 0 0.5em; margin: 0 0.1em; border-radius: 999px; vertical-align: 0.06em;
+  color: var(--link); background: color-mix(in srgb, var(--link) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--link) 35%, transparent); text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.note .answer .ref:hover, .sources .ref:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
+.note .answer .ref.unresolved { color: var(--ink-soft); border-style: dashed; background: none; }
+.sources { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 13px; }
+.sources summary { cursor: pointer; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--heading); }
+.sources ol { margin: 6px 0 0; padding-left: 22px; }
+.sources li { margin: 0 0 6px; line-height: 1.5; color: var(--ink); }
+.sources q { color: var(--ink-soft); font-style: italic; }
 .note .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--ink-soft); }
 .linkbtn { background: none; border: 0; padding: 6px 4px; color: var(--link); font-size: 12.5px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; min-height: 32px; }
 .thinking { display: flex; align-items: center; gap: 10px; color: var(--ink-soft); font-size: 14px; }
@@ -596,6 +610,23 @@ input[type="range"] { accent-color: var(--chrome-accent); width: 92px; }
 .nb-tips summary { cursor: pointer; padding: 10px 0; font-weight: 700; color: var(--heading); }
 .nb-tips ol { margin: 0 0 12px; padding-left: 20px; display: grid; gap: 6px; }
 .page-body .landed { animation: landed 1.8s ease; border-radius: 4px; }
+/* Paragraph numbers (¶) — so "[Bill, p.11 ¶3]" can be found at a glance. In the margin, out of the
+   text flow (pseudo-elements aren't part of the text, so highlights, search and read-aloud ignore them). */
+:root[data-paranums="on"] .page-body { padding-inline-start: 2em; }
+:root[data-paranums="on"] .page-body [data-para] { position: relative; }
+:root[data-paranums="on"] .page-body [data-para]::before {
+  /* em here = the number's own size (0.68 of the text): 2.9em ≈ the 2em gutter. */
+  content: attr(data-para); position: absolute; top: 0; left: -2.9em; width: 2.3em; text-align: right;
+  font-family: var(--sans); font-size: 0.68em; line-height: calc(var(--reader-leading) / 0.68 * 1em);
+  color: var(--ink-soft); font-variant-numeric: tabular-nums; user-select: none; pointer-events: none;
+}
+:root[data-paranums="on"] .page-body .item.depth-2[data-para]::before { left: -6.7em; } /* + the 2.6em indent */
+:root[data-paranums="on"] .page-body .toc[data-para]::before { left: -2.4em; line-height: calc(1.7 / 0.85 * 1em); top: 12px; }
+@media (max-width: 600px) { /* phones: a narrower margin keeps the measure readable */
+  :root[data-paranums="on"] .page-body { padding-inline-start: 1.35em; }
+  :root[data-paranums="on"] .page-body [data-para]::before { left: -2.1em; width: 1.7em; }
+  :root[data-paranums="on"] .page-body .item.depth-2[data-para]::before { left: -5.9em; }
+}
 @keyframes landed { 0%, 35% { background: color-mix(in srgb, var(--accent) 30%, transparent); } 100% { background: transparent; } }
 
 /* Exact-word highlights and notes (text-quote anchored). */

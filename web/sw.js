@@ -13,7 +13,7 @@
 //
 // Bump VERSION whenever any file in SHELL changes; the page then offers a one-tap update.
 
-const VERSION = "2.4.0-2";
+const VERSION = "2.5.0-1";
 const SHELL_CACHE = `bookmind-shell-${VERSION}`;
 const DATA_CACHE = "bookmind-data-v1";
 const AUDIO_CACHE = "bookmind-audio-v1";

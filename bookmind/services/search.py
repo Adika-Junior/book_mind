@@ -36,7 +36,7 @@ from bookmind.common.events import Event, get_bus
 from bookmind.common.rpc import ServiceClient
 from bookmind.common.service import create_service
 from bookmind.common.telemetry import log
-from bookmind.common.text import best_sentences, excerpt, tokenize
+from bookmind.common.text import excerpt, located_sentences, paragraph_of, tokenize
 
 logger = logging.getLogger("bookmind.search")
 
@@ -215,15 +215,18 @@ class PassageIndex:
             c = self.chunks[i]
             if (exclude and c["id"] == exclude) or (doc and c["doc"] != doc):
                 continue
-            words = " ".join(best_sentences(q, c["text"], 2))
+            picks = located_sentences(q, c["text"], c["doc"], 2)
+            words, para = " ".join(p for p, _ in picks), (picks[0][1] if picks else None)
             if not words and best_window is not None and best_window[i] >= 0:
                 words = self.semantic.texts[best_window[i]]  # the paragraph that matched in meaning
+                para = paragraph_of(words, c["text"], c["doc"])
             hit = {
                 "id": c["id"],
                 "doc": c["doc"],
                 "docShort": c["docShort"],
                 "docTitle": c["docTitle"],
                 "page": c["page"],
+                "para": para,
                 "score": round(float(combined[i]), 3),
                 "match": "meaning" if bm[i] <= 0 else ("words" if sem is None else "both"),
                 "snippet": excerpt(words or c["text"], 320),

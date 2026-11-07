@@ -13,6 +13,8 @@ export async function open(page) {
 
 /** Select sentence i on the page (-1 = the longest), like a reader dragging over it. */
 export async function selectSentence(page, i) {
+  // The page renders after start-up (who's signed in, the local notebook): wait for its text.
+  await page.waitForFunction((i) => [...document.querySelectorAll("#pageBody .sentence")].filter((s) => !s.closest("h2, h3, h4")).length > Math.max(i, 0), i);
   await page.evaluate((i) => {
     const all = [...document.querySelectorAll("#pageBody .sentence")].filter((s) => !s.closest("h2, h3, h4"));
     const s = i < 0 ? all.sort((a, b) => b.textContent.length - a.textContent.length)[0] : all[i];

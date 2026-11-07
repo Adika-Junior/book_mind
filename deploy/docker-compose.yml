@@ -46,6 +46,9 @@ x-env: &env
   BOOKMIND_NOTEBOOK_URL: http://notebook:8000
   BOOKMIND_WEBSEARCH_URL: http://websearch:8000
   BOOKMIND_TTS_URL: http://tts:8000
+  BOOKMIND_ACCOUNTS_URL: http://accounts:8000
+  # First admin's username. Every service needs it: notes from before accounts existed belong to it.
+  BOOKMIND_AUTH_USER: ${BOOKMIND_AUTH_USER:-bookmind}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
 
 services:
@@ -73,10 +76,9 @@ services:
       <<: *env
       SERVICE: gateway
       BOOKMIND_TRUST_PROXY: "true"
-      BOOKMIND_AUTH_USER: ${BOOKMIND_AUTH_USER:-bookmind}
-      BOOKMIND_AUTH_PASSWORD_FILE: /run/secrets/auth_password
+      BOOKMIND_AUTH_MODE: accounts            # people sign in; each has a private notebook
       BOOKMIND_ALLOWED_ORIGINS: ${BOOKMIND_ALLOWED_ORIGINS:-}
-    secrets: [internal_token, redis_password, auth_password]
+    secrets: [internal_token, redis_password]
     volumes:
       - ./config/flags.json:/app/deploy/config/flags.json:ro   # edit to flip flags live
     depends_on:
@@ -121,6 +123,21 @@ services:
     networks: [backend, models]
     deploy:
       resources: { limits: { memory: 256m } }
+
+  # Who may sign in. Holds the first admin's password only to create that account once.
+  accounts:
+    <<: *service
+    environment:
+      <<: *env
+      SERVICE: accounts
+      BOOKMIND_ACCOUNTS_DB_PATH: /app/var/accounts.db
+      BOOKMIND_AUTH_PASSWORD_FILE: /run/secrets/auth_password
+    secrets: [internal_token, redis_password, auth_password]
+    volumes:
+      - accounts_data:/app/var           # SQLite: one writer, one replica
+    networks: [backend]
+    deploy:
+      resources: { limits: { memory: 192m } }
 
   notebook:
     <<: *service
@@ -284,6 +301,7 @@ networks:
 
 volumes:
   notebook_data: {}
+  accounts_data: {}
   voices: {}
   redis_data: {}
   ollama_models: {}

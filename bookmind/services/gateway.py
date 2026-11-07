@@ -15,11 +15,8 @@ Kubernetes ingress, deploy/k8s), and optionally a CDN. See docs/ARCHITECTURE.md 
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import json
 import math
-import secrets
 import time
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -39,6 +36,8 @@ from bookmind.common.rpc import ClientError, ServiceClient, UpstreamError
 from bookmind.common.saga import Saga, SagaFailed
 from bookmind.common.service import create_service
 from bookmind.common.telemetry import RATE_LIMITED
+from bookmind.services import auth
+from bookmind.services.auth import auth_middleware, owner_of
 
 settings = get_settings()
 
@@ -49,14 +48,19 @@ research = ServiceClient("research", timeout_s=settings.ollama_timeout_s + 10, f
 notebook = ServiceClient("notebook", timeout_s=5)
 websearch = ServiceClient("websearch", timeout_s=12)
 tts = ServiceClient("tts", timeout_s=30)
-CLIENTS = {"catalog": catalog, "search": search, "research": research, "notebook": notebook, "websearch": websearch}
+CLIENTS = {"catalog": catalog, "search": search, "research": research, "notebook": notebook, "websearch": websearch,
+           "tts": tts, "accounts": auth.accounts, "notebook_admin": auth.notebook_admin}
+
+
+def as_owner(request: Request) -> dict:
+    """Headers telling the notebook whose notes these are (the signed-in account)."""
+    return {"x-bookmind-user": owner_of(request)}
 
 book_cache = Cache("book", ttl_s=300, stale_ttl_s=30 * 86400)
 definitions_cache = Cache("definitions", ttl_s=3600, stale_ttl_s=30 * 86400)
 flags = FeatureFlags(settings.flags_path, kv=get_kv() if settings.redis_url else None)
 
 NOTE_ID = r"^[A-Za-z0-9_\-]{1,64}$"
-PUBLIC_PATHS = {"/healthz", "/readyz", "/metrics"}
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
     "connect-src 'self'; manifest-src 'self'; worker-src 'self'; font-src 'self'; "
@@ -75,30 +79,6 @@ def client_ip(request: Request) -> str:
         if real:
             return real.strip()
     return request.client.host if request.client else "unknown"
-
-
-def _unauthorized() -> Response:
-    return JSONResponse(
-        {"detail": "Unauthorized"}, status_code=401, headers={"WWW-Authenticate": 'Basic realm="BookMind", charset="UTF-8"'}
-    )
-
-
-async def auth_middleware(request: Request, call_next):
-    password = settings.auth_password
-    if not password or request.url.path in PUBLIC_PATHS:
-        return await call_next(request)
-    header = request.headers.get("authorization", "")
-    if not header.lower().startswith("basic "):
-        return _unauthorized()
-    try:
-        user, _, pw = base64.b64decode(header[6:]).decode("utf-8").partition(":")
-    except (binascii.Error, UnicodeDecodeError):
-        return _unauthorized()
-    ok_user = secrets.compare_digest(user.encode(), settings.auth_user.encode())
-    ok_pw = secrets.compare_digest(pw.encode(), password.encode())
-    if not (ok_user and ok_pw):
-        return _unauthorized()
-    return await call_next(request)
 
 
 async def rate_limit_middleware(request: Request, call_next):
@@ -168,9 +148,10 @@ if settings.allowed_origins:
         CORSMiddleware,
         allow_origins=list(settings.allowed_origins),
         allow_methods=["GET", "POST", "PUT", "DELETE"],
-        allow_headers=["Content-Type", "Idempotency-Key", "Authorization", "traceparent"],
+        allow_headers=["Content-Type", "Idempotency-Key", "Authorization", "traceparent", "X-BookMind", "X-BookMind-User"],
         allow_credentials=True,
     )
+app.include_router(auth.router)
 
 
 def degraded(detail: str, retry_after: float = 5) -> JSONResponse:
@@ -214,6 +195,7 @@ async def get_definitions(request: Request):
 
 @app.get("/api/v1/search")
 async def unified_search(
+    request: Request,
     q: str = Query(..., min_length=1, max_length=500),
     k: int = Query(8, ge=1, le=25),
     mode: Literal["hybrid", "keyword", "semantic"] = "hybrid",
@@ -223,7 +205,7 @@ async def unified_search(
     async def notes():
         if not want_notes:
             return {"results": []}
-        return await search.get("/v1/notes", params={"q": q, "k": k})
+        return await search.get("/v1/notes", params={"q": q, "k": k, "owner": owner_of(request)})
 
     passages_res, notes_res = await asyncio.gather(
         search.get("/v1/passages", params={"q": q, "k": k, "mode": mode}), notes(), return_exceptions=True
@@ -332,18 +314,19 @@ def _note_payload(req: ResearchRequest, **extra) -> dict:
     }
 
 
-def research_and_save_saga(req: ResearchRequest) -> Saga:
+def research_and_save_saga(req: ResearchRequest, owner: str) -> Saga:
     """reserve note (pending) -> generate -> complete note; undo the reservation on failure."""
     note_path = f"/v1/notes/{req.note_id}"
+    who = {"x-bookmind-user": owner}
 
     async def reserve(ctx):
         ctx["reserved_at"] = int(time.time() * 1000)
-        return await notebook.put(note_path, json=_note_payload(req, status="pending", answer="", updated_at=ctx["reserved_at"]))
+        return await notebook.put(note_path, headers=who, json=_note_payload(req, status="pending", answer="", updated_at=ctx["reserved_at"]))
 
     async def unreserve(ctx):
         # Tombstone at the reservation's own timestamp: anything newer (e.g. the client's offline
         # fallback note) still wins, but the orphaned "pending" note is gone.
-        await notebook.delete(note_path, params={"updated_at": ctx["reserved_at"]})
+        await notebook.delete(note_path, headers=who, params={"updated_at": ctx["reserved_at"]})
 
     async def generate(_ctx):
         return await research.post("/v1/generate", json=_generate_payload(req))
@@ -352,6 +335,7 @@ def research_and_save_saga(req: ResearchRequest) -> Saga:
         g = ctx["generate"]
         return await notebook.put(
             note_path,
+            headers=who,
             json=_note_payload(
                 req,
                 status="done",
@@ -382,7 +366,7 @@ async def research_endpoint(req: ResearchRequest, request: Request):
             except (UpstreamError, CircuitOpenError):
                 return degraded("The research service is unavailable. An offline note was made instead.")
         try:
-            ctx = await research_and_save_saga(req).run()
+            ctx = await research_and_save_saga(req, owner_of(request)).run()
         except SagaFailed as exc:
             if isinstance(exc.cause, ClientError):
                 return JSONResponse({"detail": exc.cause.detail}, status_code=exc.cause.status)
@@ -390,16 +374,16 @@ async def research_endpoint(req: ResearchRequest, request: Request):
         g = ctx["generate"]
         return JSONResponse({**g, "note": ctx["complete"]["note"], "saved": ctx["complete"]["applied"]})
 
-    return await idempotent(request, "research", handler)
+    return await idempotent(request, f"research:{owner_of(request)}", handler)
 
 
 # ----------------------------------------------------------------------------- notebook
 
 
 @app.get("/api/v1/notes")
-async def list_notes(include_deleted: bool = False):
+async def list_notes(request: Request, include_deleted: bool = False):
     try:
-        return await notebook.get("/v1/notes", params={"include_deleted": str(include_deleted).lower()})
+        return await notebook.get("/v1/notes", headers=as_owner(request), params={"include_deleted": str(include_deleted).lower()})
     except (UpstreamError, CircuitOpenError):
         return degraded("The notebook service is unavailable. Changes are kept on this device and will sync later.")
 
@@ -412,11 +396,11 @@ async def put_note(request: Request, note_id: str = Path(..., pattern=NOTE_ID)):
         except ValueError:
             return JSONResponse({"detail": "Body must be JSON."}, status_code=400)
         try:
-            return JSONResponse(await notebook.put(f"/v1/notes/{note_id}", json=payload))
+            return JSONResponse(await notebook.put(f"/v1/notes/{note_id}", headers=as_owner(request), json=payload))
         except (UpstreamError, CircuitOpenError):
             return degraded("The notebook service is unavailable. The note is kept on this device and will sync later.")
 
-    return await idempotent(request, "notes", handler)
+    return await idempotent(request, f"notes:{owner_of(request)}", handler)
 
 
 @app.delete("/api/v1/notes/{note_id}")
@@ -424,11 +408,11 @@ async def delete_note(request: Request, note_id: str = Path(..., pattern=NOTE_ID
     async def handler() -> Response:
         params = {"updated_at": updated_at} if updated_at else None
         try:
-            return JSONResponse(await notebook.delete(f"/v1/notes/{note_id}", params=params))
+            return JSONResponse(await notebook.delete(f"/v1/notes/{note_id}", headers=as_owner(request), params=params))
         except (UpstreamError, CircuitOpenError):
             return degraded("The notebook service is unavailable. The deletion will sync later.")
 
-    return await idempotent(request, "notes", handler)
+    return await idempotent(request, f"notes:{owner_of(request)}", handler)
 
 
 # ----------------------------------------------------------------------------- web search

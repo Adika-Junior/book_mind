@@ -634,3 +634,68 @@ mark.anchor { color: inherit; cursor: pointer; border-radius: 2px; padding: 0.05
 mark.anchor.hl { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 mark.anchor.note { background: color-mix(in srgb, var(--secondary) 16%, transparent); box-shadow: inset 0 -2px 0 var(--secondary); }
 .sentence.reading mark.anchor { background: transparent; }
+
+/* ------------------------------------------------------------------ accounts: sign-in, menu, dialogs */
+.login {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 20px;
+  background: var(--chrome); overflow-y: auto;
+}
+.login .card {
+  width: min(400px, 100%); display: flex; flex-direction: column; gap: 6px; padding: 28px 24px;
+  background: var(--bg); color: var(--ink); border-radius: var(--radius); box-shadow: var(--shadow); border-top: 4px solid var(--accent);
+}
+.login img { align-self: center; }
+.login h2 { margin: 6px 0 0; text-align: center; font-family: var(--serif); color: var(--heading); }
+.login .hint { text-align: center; }
+.login .btn { margin-top: 10px; min-height: 46px; }
+.login label, .form-card label { font-size: 13px; font-weight: 700; color: var(--ink); margin-top: 8px; }
+.login input, .form-card input, .form-card select {
+  min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+}
+.login input:focus-visible, .form-card input:focus-visible, .form-card select:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.hint { font-size: 13px; line-height: 1.5; color: var(--ink-soft); margin: 2px 0; }
+.hint.small { font-size: 12px; margin-top: 10px; }
+.form-error {
+  margin: 8px 0 0; padding: 8px 10px; font-size: 13.5px; border-radius: var(--radius-sm); color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 18%, transparent); border-left: 4px solid var(--accent);
+}
+
+.menu {
+  position: fixed; z-index: 75; top: calc(58px + env(safe-area-inset-top, 0px)); right: 10px; min-width: 220px;
+  display: flex; flex-direction: column; padding: 6px; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.menu-head { display: flex; flex-direction: column; padding: 8px 10px 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.menu-head span { font-size: 12px; color: var(--ink-soft); }
+.menu button {
+  min-height: 42px; padding: 0 10px; text-align: left; font: inherit; font-size: 14.5px; color: var(--ink);
+  background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer;
+}
+.menu button:hover, .menu button:focus-visible { background: var(--hl-spoken); outline: none; }
+
+.form-card { padding: 20px; gap: 4px; overflow-y: auto; width: min(460px, 100%); }
+.form-card.wide { width: min(760px, 100%); }
+.form-card h2 { margin: 0 0 4px; font-family: var(--serif); font-size: 1.3rem; color: var(--heading); }
+.form-card .row { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 14px; }
+.form-card .row.head { justify-content: space-between; margin: 0; }
+.form-card .row.head .iconbtn { color: var(--ink); }
+.add-user { display: grid; grid-template-columns: 1.2fr 1.2fr 0.9fr auto; gap: 8px; align-items: end; margin-top: 10px; }
+.add-user > div { display: flex; flex-direction: column; min-width: 0; }
+.add-user .hint { grid-column: 1 / -1; }
+.temp-pw {
+  margin-top: 10px; padding: 12px; border-radius: var(--radius-sm); background: var(--surface-2);
+  border: 1px dashed var(--secondary); font-size: 14px; line-height: 1.5;
+}
+.temp-pw code { font-size: 15px; font-weight: 700; user-select: all; }
+.users-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.user-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+}
+.user-row .who { flex: 1 1 200px; min-width: 0; }
+.user-row .who strong { display: block; }
+.user-row .who span { font-size: 12.5px; color: var(--ink-soft); }
+.user-row .actions { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.user-row.off { opacity: .75; }
+@media (max-width: 640px) { .add-user { grid-template-columns: 1fr 1fr; } .add-user .btn { grid-column: 1 / -1; } }

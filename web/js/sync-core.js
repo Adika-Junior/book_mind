@@ -8,12 +8,14 @@
 //   * Web Locks: only one context replays the outbox at a time (page and worker never race);
 //   * Idempotency-Keys derived from (note id, updated_at): a replay whose response was lost is
 //     answered from the server's idempotency store instead of being applied twice;
-//   * last-writer-wins `updated_at` on the server: stale replays can't overwrite newer edits.
+//   * last-writer-wins `updated_at` on the server: stale replays can't overwrite newer edits;
+//   * accounts: each account has its own database, and every replayed change says whose it is
+//     (X-BookMind-User). If someone else is signed in, the server answers 409 and the change stays
+//     queued for its owner instead of being filed under the wrong person.
 
 (function (root) {
   "use strict";
 
-  const DB_NAME = "bookmind";
   const DB_VERSION = 1;
   const LOCK = "bookmind-outbox";
 
@@ -23,51 +25,67 @@
     if (!db.objectStoreNames.contains("outbox")) db.createObjectStore("outbox", { keyPath: "seq", autoIncrement: true });
   }
 
-  let dbPromise = null;
-  function openDB() {
-    if (!dbPromise) {
-      dbPromise = new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, DB_VERSION);
-        req.onupgradeneeded = () => upgrade(req.result);
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-        req.onblocked = () => reject(new Error("IndexedDB blocked"));
-      });
-      dbPromise.catch(() => { dbPromise = null; });
-    }
-    return dbPromise;
+  function openDB(name) {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(name, DB_VERSION);
+      req.onupgradeneeded = () => upgrade(req.result);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error("IndexedDB blocked"));
+    });
   }
 
-  function run(storeName, mode, fn) {
-    return openDB().then((db) => new Promise((resolve, reject) => {
-      const t = db.transaction(storeName, mode);
+  /** Minimal IndexedDB adapter with the same shape as store.js (used inside the service worker). */
+  function idbStore(name) {
+    let dbp = null;
+    const db = () => (dbp ||= openDB(name));
+    const run = (storeName, mode, fn) => db().then((conn) => new Promise((resolve, reject) => {
+      const t = conn.transaction(storeName, mode);
       const r = fn(t.objectStore(storeName));
       t.oncomplete = () => resolve(r && "result" in r ? r.result : undefined);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
     }));
+    return {
+      outbox: () => run("outbox", "readonly", (s) => s.getAll()).then((ops) => (ops || []).sort((a, b) => a.seq - b.seq)),
+      getNote: (id) => run("notes", "readonly", (s) => s.get(id)),
+      putNote: (note) => run("notes", "readwrite", (s) => { s.put(note); }),
+      deleteNote: (id) => run("notes", "readwrite", (s) => { s.delete(id); }),
+      dequeue: (seq) => run("outbox", "readwrite", (s) => { s.delete(seq); }),
+      close: () => dbp && dbp.then((c) => c.close()).catch(() => {}),
+    };
   }
 
-  /** Minimal IndexedDB adapter with the same shape as store.js (used inside the service worker). */
-  const idbStore = {
-    outbox: () => run("outbox", "readonly", (s) => s.getAll()).then((ops) => (ops || []).sort((a, b) => a.seq - b.seq)),
-    getNote: (id) => run("notes", "readonly", (s) => s.get(id)),
-    putNote: (note) => run("notes", "readwrite", (s) => { s.put(note); }),
-    deleteNote: (id) => run("notes", "readwrite", (s) => { s.delete(id); }),
-    dequeue: (seq) => run("outbox", "readwrite", (s) => { s.delete(seq); }),
-  };
+  /** The account this device is signed in as (written by store.js), or null when signed out. */
+  function activeAccount() {
+    return new Promise((resolve) => {
+      const req = indexedDB.open("bookmind-meta", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("kv");
+      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const conn = req.result;
+        try {
+          const r = conn.transaction("kv").objectStore("kv").get("active");
+          r.onsuccess = () => { conn.close(); resolve(r.result || null); };
+          r.onerror = () => { conn.close(); resolve(null); };
+        } catch { conn.close(); resolve(null); }
+      };
+    });
+  }
 
   class HttpError extends Error {
     constructor(status, detail) { super(detail || `HTTP ${status}`); this.status = status; }
   }
 
-  const isTransient = (err) => !(err && err.status) || err.status >= 500 || [408, 409, 425, 429].includes(err.status);
+  // 401/403: signed out, session expired or first-login password pending — keep the change queued
+  // until its owner signs in. Only 400/404/413/422 mean the change itself is invalid.
+  const isTransient = (err) => !(err && err.status) || err.status >= 500 || [401, 403, 408, 409, 425, 429].includes(err.status);
 
   /** A bare fetch-based requester for contexts without net.js (the service worker). */
-  async function request(path, { method = "GET", body, idempotencyKey, keepalive = false, timeout = 15000 } = {}) {
+  async function request(path, { method = "GET", body, idempotencyKey, keepalive = false, timeout = 15000, headers: extra = {} } = {}) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeout);
-    const headers = { Accept: "application/json" };
+    const headers = { Accept: "application/json", "X-BookMind": "1", ...extra };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
     try {
@@ -84,8 +102,9 @@
   }
 
   /** The HTTP call that replays one queued op (shared with the keepalive flush on page close). */
-  function sendOp(op, send, extra) {
+  function sendOp(op, send, extra = {}) {
     const id = encodeURIComponent(op.id);
+    if (op.owner) extra = { ...extra, headers: { ...(extra.headers || {}), "X-BookMind-User": op.owner } };
     if (op.op === "put") {
       return send(`/api/v1/notes/${id}`, { method: "PUT", body: op.payload, idempotencyKey: `put-${op.id}-${op.payload.updated_at}`, ...extra });
     }
@@ -145,7 +164,7 @@
   }
 
   /** One full sync round: push local changes, then pull remote ones. */
-  function syncOnce(db = idbStore, send = request, { pull = true } = {}) {
+  function syncOnce(db, send = request, { pull = true } = {}) {
     return withLock(async () => {
       const pushed = await pushOutbox(db, send);
       const changed = pull ? await pullNotes(db, send) : false;
@@ -153,5 +172,17 @@
     });
   }
 
-  root.BookMindSync = { idbStore, request, sendOp, pushOutbox, pullNotes, withLock, syncOnce, isTransient, HttpError };
+  /** Background sync from the service worker: the signed-in account's queue, or nothing. */
+  async function syncActiveAccount({ pull = true } = {}) {
+    const who = await activeAccount();
+    if (!who) return { pushed: 0, changed: false };
+    const db = idbStore(`bookmind-${who}`);
+    try {
+      return await syncOnce(db, request, { pull });
+    } finally {
+      db.close();
+    }
+  }
+
+  root.BookMindSync = { idbStore, activeAccount, syncActiveAccount, request, sendOp, pushOutbox, pullNotes, withLock, syncOnce, isTransient, HttpError };
 })(typeof self !== "undefined" ? self : globalThis);

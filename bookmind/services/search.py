@@ -245,7 +245,8 @@ class NotesProjection:
         self.versions: dict[str, int] = {}  # includes tombstones, so late upserts can't resurrect
 
     def apply(self, kind: str, note: dict) -> None:
-        nid, version = note["id"], int(note.get("updated_at") or 0)
+        # Keyed by (owner, id): note ids are only unique per account.
+        nid, version = (note.get("owner") or "", note["id"]), int(note.get("updated_at") or 0)
         if version < self.versions.get(nid, -1):
             return
         self.versions[nid] = version
@@ -255,12 +256,14 @@ class NotesProjection:
             text = f"{note.get('selection', '')} {note.get('answer', '')} {note.get('comment', '')} {note.get('session', '')}"
             self.notes[nid] = {**note, "_tokens": tokenize(text)}
 
-    def query(self, q: str, k: int = 10) -> list[dict]:
+    def query(self, q: str, owner: str, k: int = 10) -> list[dict]:
         qt = set(tokenize(q))
         if not qt:
             return []
         scored = []
-        for n in self.notes.values():
+        for (note_owner, _), n in self.notes.items():
+            if note_owner != owner:
+                continue
             toks = n["_tokens"]
             score = sum(toks.count(t) for t in qt) / (1 + len(toks) ** 0.5)
             if score > 0:
@@ -307,7 +310,7 @@ async def _bootstrap() -> None:
             log(logger, logging.WARNING, "passage_index_retry", attempt=attempt, error=repr(exc))
             await asyncio.sleep(min(10, 0.5 * 2**attempt))
     try:
-        snapshot = await notebook.get("/v1/notes", params={"include_deleted": "true"})
+        snapshot = await notebook.get("/v1/all-notes", params={"include_deleted": "true"})
         for n in snapshot.get("notes", []):
             projection.apply("upserted", n)
         for t in snapshot.get("tombstones", []):
@@ -369,5 +372,10 @@ async def semantic_pack(request: Request):
 
 
 @app.get("/v1/notes")
-async def search_notes(q: str = Query(..., min_length=1, max_length=500), k: int = Query(10, ge=1, le=50)):
-    return {"results": projection.query(q, k), "projection_size": len(projection.notes)}
+async def search_notes(
+    q: str = Query(..., min_length=1, max_length=500),
+    owner: str = Query(..., pattern=r"^[a-z0-9][a-z0-9._-]{1,31}$"),
+    k: int = Query(10, ge=1, le=50),
+):
+    """Search one account's notes (the gateway passes the signed-in user)."""
+    return {"results": projection.query(q, owner, k)}

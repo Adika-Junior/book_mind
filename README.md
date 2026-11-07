@@ -35,6 +35,9 @@ from a **local, free, open-weight model**, and keep a notebook that syncs across
   Wikipedia (no API keys, no tracking). Results are ranked and labelled by source quality
   (official Kenyan, intergovernmental, academic, reference, news, other), kept separate from the
   documents in answers, and saved with the date you accessed them.
+- 👥 **Private notebooks.** Each person signs in and has their own notebook — on the server and
+  on a shared device. Administrators add people, reset passwords and remove accounts (with
+  their notes). On your own laptop it runs without any sign-in.
 - 🧭 **Structure you can follow.** Real headings and clause lists rebuilt from the PDFs, a
   contents sidebar, a live "you are here" breadcrumb, time left, and an "Up next" signpost.
 
@@ -59,7 +62,9 @@ ollama pull llama3.2               # or qwen2.5:7b-instruct, mistral, phi3.5 …
 Without Ollama, everything still works: Research and Simplify give an *extractive* note built
 from the Bill's own definitions and the best-matching cited sentences.
 
-Settings live in `.env` (copy `.env.example`).
+Settings live in `.env` (copy `.env.example`). This runs in **single-user mode**: no sign-in, one
+notebook. To give several people their own notebooks, set an administrator password (see
+[Accounts](#accounts)).
 
 ### 2. As separate services (Docker Compose)
 
@@ -67,11 +72,11 @@ Settings live in `.env` (copy `.env.example`).
 ./deploy/make-secrets.sh                                   # random secrets + self-signed TLS cert
 docker compose -f deploy/docker-compose.yml up -d --build
 docker compose -f deploy/docker-compose.yml exec ollama ollama pull llama3.2
-open https://localhost                                     # user: bookmind, password printed above
+open https://localhost                                     # sign in as bookmind with the password printed above
 ```
 
 This starts the NGINX edge (TLS, HTTP/2, rate limits, caching), 2× gateway, catalog,
-2× search, research, notebook, websearch + a private SearXNG, Redis and Ollama, on segmented
+2× search, research, notebook, accounts, websearch, tts + a private SearXNG, Redis and Ollama, on segmented
 internal networks. Only `websearch`/`searxng` (and Ollama, for model downloads) can reach the
 internet. Turn web search off for everyone with `"web_search_enabled": false` in
 `deploy/config/flags.json`; in single-process mode it uses Wikipedia unless you set
@@ -133,6 +138,30 @@ Offline mode needs HTTPS (browsers only allow service workers on HTTPS or `local
 
 ---
 
+## Accounts
+
+Turn accounts on by giving BookMind an administrator password — `BOOKMIND_AUTH_PASSWORD` (or
+`BOOKMIND_AUTH_PASSWORD_FILE`); `deploy/make-secrets.sh` and the Kubernetes secret already do.
+The first administrator is `bookmind` (change with `BOOKMIND_AUTH_USER`).
+
+| Who | What they do |
+|---|---|
+| Administrator | Account menu (top right) → **Manage accounts**: add a person (they get a one-time password to share privately), reset a password, disable or re-enable, make admin or reader, delete an account together with its notes. |
+| Everyone | Sign in once per device and stay signed in (30 days from last use). **Change password** and **Sign out** are in the account menu. A new account must choose its own password at first sign-in. |
+
+- **Private.** Notes belong to their owner. Nobody else — administrators included — can read
+  them through BookMind. On a shared device each person's notebook is stored separately.
+- **Offline.** The last person signed in on a device keeps reading and taking notes offline. A
+  change made offline is only ever sent as that person, even if someone else signs in first.
+- **Security.** Passwords are hashed (scrypt), at least 10 characters (phrases welcome), and
+  common ones are refused. Ten wrong attempts lock an account for 15 minutes; sign-ins are also
+  rate-limited per address. Disabling an account or resetting its password signs it out everywhere.
+- Scripts can call the API with HTTP Basic credentials; unsafe requests need `X-BookMind: 1`.
+- **Lost the only administrator password?** Stop BookMind, set a new `BOOKMIND_AUTH_PASSWORD`,
+  and move `data/accounts.db` aside (in Docker: the `accounts_data` volume). Start again and the
+  administrator is recreated. Notes are not stored in that file, so nothing is lost: re-add the
+  other people with the same usernames and their notebooks are theirs again.
+
 ## Voices for read-aloud
 
 ```bash
@@ -173,7 +202,8 @@ up on its next visit, and saved notes keep pointing at the same document and pag
 bookmind/
   common/        platform library: config & flags, secrets, telemetry, resilience, KV/cache,
                  event bus (memory / Redis Streams), RPC + discovery, idempotency, saga
-  services/      gateway · catalog · search · research · notebook · websearch · tts   (one ASGI app each)
+  services/      gateway (+ auth.py: sign-in & sessions) · accounts · catalog · search · research ·
+                 notebook · websearch · tts   (one ASGI app each)
   local.py       single-process wiring        serve.py   container entrypoint (SERVICE=…)
 tools/           ingest.py (PDFs → data/chunks.json) · themes.py (palettes → themes.css, contrast-checked)
                  voices.py (download / add Piper voices, with licence + consent records)

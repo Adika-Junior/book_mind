@@ -58,6 +58,7 @@ history) are in [`rag-digital-book-architecture.md`](rag-digital-book-architectu
 | notebook | notes (SQLite), outbox | **one writer** (see §4 for the Postgres path) | `bookmind/services/notebook.py` |
 | websearch | nothing (cache in Redis); the **only** app service with internet egress | horizontally | `bookmind/services/websearch.py` |
 | tts | nothing (voice files on a read-only volume, audio LRU in memory); no egress at all | horizontally on RWX/ROX storage; CPU-bound | `bookmind/services/tts.py` |
+| accounts | users, password hashes, roles (SQLite) | **one writer**; called only by the gateway | `bookmind/services/accounts.py` |
 
 The same code runs in three shapes:
 
@@ -166,6 +167,39 @@ broker-neutral.
 | **CI/CD & deployment strategy** | GitHub Actions: lint → tests (including against a real Redis) → `pip-audit` → manifest drift check + kubeconform + promtool + compose validation → image build with SBOM/provenance → Trivy scan → gated deploy on tags. **Rolling updates** with `maxUnavailable: 0`, automatic `rollout undo` if pods never become ready, and a **canary** ingress example. Dependabot keeps pins current. | `.github/workflows/ci.yml`, `deploy/k8s/canary.example.yaml` |
 
 ---
+
+## 7b. Identity: accounts, sessions and private notebooks
+
+- **Modes.** `BOOKMIND_AUTH_MODE=accounts` (default once an admin password is configured): people
+  sign in and every notebook is private. `none` (default without a password): no sign-in, one
+  notebook owned by the local user — the laptop/Raspberry Pi mode.
+- **accounts service** owns the user table: scrypt hashes with per-user salt and stored parameters
+  (upgraded on sign-in), NIST SP 800-63B password rules (≥10 chars, no composition rules, refuse
+  common passwords and the username), constant-work checks for unknown users, 10 failures → 15-min
+  lock, at least one active admin always, an `epoch` per user that changes on disable / reset /
+  role change / password change.
+- **Gateway** (`bookmind/services/auth.py`) verifies sign-ins with the accounts service and keeps
+  sessions in the shared KV (Redis): only a SHA-256 of the token is stored; the browser holds the
+  token in an `HttpOnly; SameSite=Lax; Secure` cookie. 30-day sliding expiry. A session dies when
+  its user's epoch moves (checked per request), so disabling someone signs them out everywhere.
+  Login is rate-limited per address. Unsafe API calls require `X-BookMind: 1` (CSRF: browsers
+  can't add custom headers cross-site without a preflight the gateway refuses). Basic auth stays
+  for scripts (cached 5 min, since scrypt is deliberately slow). No `WWW-Authenticate` header, so
+  browsers never show their own login box.
+- **Ownership.** The gateway passes the authenticated username to the notebook in
+  `x-bookmind-user` (internal network + internal token only). Notes and tombstones are keyed by
+  `(owner, id)`; every query filters by owner; idempotency keys are scoped per owner; events carry
+  the owner and the search read model is keyed and queried by owner. Deleting an account erases its
+  notes (each deletion is published, so the read model forgets them too). Existing databases are
+  migrated in place: notes from before accounts belong to `BOOKMIND_AUTH_USER`.
+- **Devices.** One IndexedDB per account (`bookmind-<username>`); personal preferences (position,
+  sessions, web consent) are namespaced per account, device ones (theme, voice) are shared. Every
+  queued change records its owner and is replayed with `X-BookMind-User`; if a different person is
+  signed in the gateway answers 409 and the change waits for its owner. The service worker syncs
+  only the active account (recorded in a small `bookmind-meta` database). A sign-out made offline is
+  remembered and sent to the server before anyone can sign in again on that device.
+- Tested in-process (`tests/test_accounts.py`), as separate processes over HTTP, and in the
+  browser against a second server with accounts on (`tests/e2e/specs/accounts.spec.mjs`).
 
 ## 8. Offline-first client (the "works offline, on every device" requirement)
 

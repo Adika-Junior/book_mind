@@ -2,6 +2,7 @@
 // BookMind reader — offline-first PWA front end.
 
 import { api, HttpError, SyncEngine } from "./net.js";
+import * as account from "./account.js";
 import { citeLabel, escapeHtml, parseCite, renderMD } from "./md.js";
 import { definitions, excerpt, extractiveAnswer, loadSemanticPack, paragraphOf, searchNotes, searchPassages, semanticReady, tokenize } from "./search.js";
 import { buildOutline, nextHeading, PARAGRAPH_TYPES, paragraphs, sectionAt, structure } from "./structure.js";
@@ -1561,6 +1562,7 @@ async function refreshStatus() {
 /* =========================================================== service worker & install */
 
 let userRequestedReload = false;
+let reauthenticating = false;
 async function registerSW() {
   if (!("serviceWorker" in navigator)) return;
   try {
@@ -1857,6 +1859,27 @@ async function boot() {
   applyPrefs();
   registerSW();
   store.requestPersistence();
+  // Who is reading? Signs in if needed; offline, the last person signed in on this device continues.
+  const me = await account.establish({ toast });
+  if (!me) {
+    $("bootMsg").textContent = "You're offline, and nobody has signed in on this device yet. Connect once to sign in; after that BookMind works offline.";
+    $("boot").hidden = false;
+    $("bootRetry").onclick = () => location.reload();
+    return;
+  }
+  state.user = me.user;
+  await store.useAccount(me.user.username, { legacyOwner: me.legacy_owner });
+  if (me.user.username === me.legacy_owner) store.prefs.adoptLegacy();
+  account.mountMenu(me, {
+    pendingChanges: () => sync.pending(),
+    beforeSignOut: () => (navigator.onLine ? sync.run() : null),
+    afterSignOut: () => store.signOutDevice(),
+  });
+  addEventListener("bookmind:auth", async (e) => {
+    if (reauthenticating) return;
+    reauthenticating = true;
+    try { if (await account.reauthenticate(e.detail)) sync.run(); } finally { reauthenticating = false; }
+  });
   try {
     await loadBook();
   } catch (err) {

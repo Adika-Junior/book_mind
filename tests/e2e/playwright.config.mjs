@@ -9,6 +9,10 @@ const root = path.resolve(import.meta.dirname, "../..");
 const python = process.env.PYTHON || "python3";
 const port = Number(process.env.E2E_PORT || 8765);
 const db = path.join(os.tmpdir(), `bookmind-e2e-${Date.now()}.db`);
+// A second BookMind with accounts switched on (specs/accounts.spec.mjs).
+export const ACCOUNTS_PORT = Number(process.env.E2E_ACCOUNTS_PORT || 8766);
+export const ADMIN_PASSWORD = "e2e-admin-passphrase";
+const accountsDir = path.join(os.tmpdir(), `bookmind-e2e-accounts-${Date.now()}`);
 // Use an already-installed Chromium (e.g. one from a newer Playwright) instead of downloading one.
 const launchOptions = process.env.PW_CHROMIUM_PATH ? { executablePath: process.env.PW_CHROMIUM_PATH } : {};
 
@@ -38,6 +42,25 @@ export default defineConfig({
         BOOKMIND_OLLAMA_URL: "http://127.0.0.1:11435/api/chat",
         BOOKMIND_SEARXNG_URL: "http://127.0.0.1:8899",
         BOOKMIND_WEBSEARCH_PROVIDERS: "searxng",
+        BOOKMIND_RATE_API_BURST: "100000",
+        BOOKMIND_RATE_RESEARCH_BURST: "100000",
+      },
+    },
+    {
+      command: `${python} -m bookmind --port ${ACCOUNTS_PORT}`,
+      cwd: root,
+      url: `http://localhost:${ACCOUNTS_PORT}/healthz`,
+      reuseExistingServer: false,
+      timeout: 60_000,
+      env: {
+        BOOKMIND_AUTH_MODE: "accounts",
+        BOOKMIND_AUTH_USER: "admin",
+        BOOKMIND_AUTH_PASSWORD: ADMIN_PASSWORD,
+        BOOKMIND_DB_PATH: path.join(accountsDir, "notebook.db"),
+        BOOKMIND_ACCOUNTS_DB_PATH: path.join(accountsDir, "accounts.db"),
+        BOOKMIND_OLLAMA_URL: "http://127.0.0.1:11435/api/chat",
+        BOOKMIND_WEBSEARCH_PROVIDERS: "searxng",
+        BOOKMIND_SEARXNG_URL: "http://127.0.0.1:8899",
         BOOKMIND_RATE_API_BURST: "100000",
         BOOKMIND_RATE_RESEARCH_BURST: "100000",
       },

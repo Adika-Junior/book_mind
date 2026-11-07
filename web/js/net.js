@@ -16,13 +16,19 @@ export class HttpError extends Error {
 export async function api(path, { method = "GET", body, timeout = 15000, idempotencyKey, headers = {} } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
-  const h = { Accept: "application/json", traceparent: `00-${hex(16)}-${hex(8)}-01`, ...headers };
+  // X-BookMind: the gateway's CSRF guard — other sites can't add custom headers to requests here.
+  const h = { Accept: "application/json", "X-BookMind": "1", traceparent: `00-${hex(16)}-${hex(8)}-01`, ...headers };
   if (body !== undefined) h["Content-Type"] = "application/json";
   if (idempotencyKey) h["Idempotency-Key"] = idempotencyKey;
   try {
     const res = await fetch(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: h, signal: ctrl.signal, credentials: "same-origin" });
     const data = res.status === 204 ? null : await res.json().catch(() => null);
-    if (!res.ok) throw new HttpError(res.status, data && data.detail, res.headers);
+    if (!res.ok) {
+      // Signed out elsewhere, session expired, or a temporary password to replace: let the app ask.
+      const code = data && data.code;
+      if (code === "auth_required" || code === "password_change_required") dispatchEvent(new CustomEvent("bookmind:auth", { detail: code }));
+      throw new HttpError(res.status, data && data.detail, res.headers);
+    }
     return data;
   } finally {
     clearTimeout(timer);

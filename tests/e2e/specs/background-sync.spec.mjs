@@ -4,6 +4,9 @@
 import { expect, test } from "@playwright/test";
 import { open, seed, selectSentence } from "./helpers.mjs";
 
+// Single-user mode: every note belongs to the local user ("bookmind"), whose device database is
+// "bookmind-bookmind" (store.js keeps one database per account).
+
 /** Ask Chromium to fire a Background Sync event at our service worker, as it does when the
  *  network returns. Done from an unrelated tab: no BookMind page is open. */
 async function fireSync(context, origin, tag, periodic = false) {
@@ -46,7 +49,7 @@ test("a note made offline syncs after the app is closed", async ({ page, context
   await again.locator("#notebookBtn").click();
   await expect(again.locator("#netChip")).toBeHidden();
   expect(await again.evaluate(() => new Promise((resolve) => {
-    const req = indexedDB.open("bookmind");
+    const req = indexedDB.open("bookmind-bookmind");
     req.onsuccess = () => { const r = req.result.transaction("outbox").objectStore("outbox").count(); r.onsuccess = () => resolve(r.result); };
   }))).toBe(0);
 });
@@ -61,6 +64,7 @@ test("periodic sync pulls notes made on another device while the app is closed",
   const now = Date.now();
   const id = `other-device-${now}`;
   const res = await context.request.put(`/api/v1/notes/${id}`, {
+    headers: { "X-BookMind": "1" },
     data: { doc: "bill", doc_short: "Bill", page: 3, mode: "note", selection: "Written on my phone", answer: "", status: "done", created_at: now, updated_at: now, comment: "from the phone" },
   });
   expect(res.ok()).toBe(true);
@@ -69,7 +73,7 @@ test("periodic sync pulls notes made on another device while the app is closed",
   // The worker stored it in IndexedDB — no page did.
   await probe.goto("/healthz");
   await expect.poll(() => probe.evaluate((id) => new Promise((resolve) => {
-    const req = indexedDB.open("bookmind");
+    const req = indexedDB.open("bookmind-bookmind");
     req.onsuccess = () => {
       if (!req.result.objectStoreNames.contains("notes")) { resolve(false); return; }
       const r = req.result.transaction("notes").objectStore("notes").get(id);

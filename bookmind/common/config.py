@@ -78,6 +78,10 @@ class Settings:
     db_path: Path = field(
         default_factory=lambda: Path(env("BOOKMIND_DB_PATH", str(ROOT_DIR / "data" / "notebook.db")))
     )
+    accounts_db_path: Path = field(
+        default_factory=lambda: Path(env("BOOKMIND_ACCOUNTS_DB_PATH", str(ROOT_DIR / "data" / "accounts.db")))
+    )
+    session_days: int = field(default_factory=lambda: env_int("BOOKMIND_SESSION_DAYS", 30))
     web_dir: Path = field(default_factory=lambda: Path(env("BOOKMIND_WEB_DIR", str(ROOT_DIR / "web"))))
     flags_path: Path = field(
         default_factory=lambda: Path(
@@ -136,6 +140,24 @@ class Settings:
     def auth_password(self) -> str | None:
         # A property, not a field: re-read on each request so a rotated secret file applies live.
         return secret("BOOKMIND_AUTH_PASSWORD")
+
+    @property
+    def auth_mode(self) -> str:
+        """"accounts": people sign in and each has a private notebook. "none": no sign-in, one
+        notebook (a personal laptop). "auto" (default) = accounts once an admin password is set.
+        Read per call, like the password, so it follows the deployment's secrets."""
+        mode = (env("BOOKMIND_AUTH_MODE", "auto") or "auto").lower()
+        if mode == "auto":
+            return "accounts" if self.auth_password else "none"
+        if mode not in ("accounts", "none"):
+            raise ValueError(f"BOOKMIND_AUTH_MODE must be auto, accounts or none, not {mode!r}")
+        return mode
+
+    @property
+    def local_owner(self) -> str:
+        """Owner of every note in "none" mode — the bootstrap admin's name, so turning accounts on
+        later hands the existing notebook to that admin."""
+        return (self.auth_user or "bookmind").strip().lower()
 
     @property
     def internal_token(self) -> str | None:

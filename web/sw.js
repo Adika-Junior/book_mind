@@ -13,7 +13,7 @@
 //
 // Bump VERSION whenever any file in SHELL changes; the page then offers a one-tap update.
 
-const VERSION = "2.4.0-1";
+const VERSION = "2.4.0-2";
 const SHELL_CACHE = `bookmind-shell-${VERSION}`;
 const DATA_CACHE = "bookmind-data-v1";
 const AUDIO_CACHE = "bookmind-audio-v1";
@@ -85,6 +85,9 @@ self.addEventListener("message", (event) => {
 importScripts("/js/sync-core.js");
 
 async function backgroundSync({ pull }) {
+  // Same rule as the page's SyncEngine: don't attempt a round while known to be offline. A rejected
+  // "sync" is retried by the browser; the keepalive flush and the next app open also cover it.
+  if (!navigator.onLine) throw new Error("offline");
   const { pushed, changed } = await self.BookMindSync.syncOnce(self.BookMindSync.idbStore, self.BookMindSync.request, { pull });
   if (pushed || changed) {
     for (const c of await self.clients.matchAll({ type: "window" })) c.postMessage({ type: "SYNCED", pushed, changed });

@@ -190,6 +190,8 @@ docs/            ARCHITECTURE.md (blueprint → implementation), original design
 pip install -r requirements-dev.txt
 ruff check . && pytest -q && node --test "tests/js/*.test.mjs"
 (cd tests/e2e && npm ci && npx playwright install chromium && npx playwright test)   # browser tests
+# already have a Chromium (e.g. from another Playwright version)? skip the install and use it:
+#   PW_CHROMIUM_PATH=/path/to/chrome npx playwright test
 python tools/themes.py            # regenerate web/css/themes.css after editing a palette
 TEST_REDIS_URL=redis://localhost:6379/0 pytest -q     # also exercise the Redis backends
 ```

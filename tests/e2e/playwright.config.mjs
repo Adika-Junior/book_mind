@@ -9,6 +9,8 @@ const root = path.resolve(import.meta.dirname, "../..");
 const python = process.env.PYTHON || "python3";
 const port = Number(process.env.E2E_PORT || 8765);
 const db = path.join(os.tmpdir(), `bookmind-e2e-${Date.now()}.db`);
+// Use an already-installed Chromium (e.g. one from a newer Playwright) instead of downloading one.
+const launchOptions = process.env.PW_CHROMIUM_PATH ? { executablePath: process.env.PW_CHROMIUM_PATH } : {};
 
 export default defineConfig({
   testDir: "./specs",
@@ -17,7 +19,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
-  use: { baseURL: `http://localhost:${port}`, trace: "retain-on-failure", screenshot: "only-on-failure" },
+  use: { baseURL: `http://localhost:${port}`, trace: "retain-on-failure", screenshot: "only-on-failure", launchOptions },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
     { name: "phone", use: { ...devices["Pixel 7"] } },
